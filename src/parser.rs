@@ -87,7 +87,14 @@ impl Parser {
     }
     fn parse_atom(&mut self) -> Option<Formula> {
         if let Some(Token::Symbol(s)) = self.tokens.peek() {
-            if s == "¬" || s == "!" {
+            if s == "¬" || s == "!" || s == "not" {
+                self.tokens.next();
+                let inner = self.parse_atom()?;
+                return Some(Formula::Not(Box::new(inner)));
+            }
+        }
+        if let Some(Token::Keyword(k)) = self.tokens.peek() {
+            if k == "not" {
                 self.tokens.next();
                 let inner = self.parse_atom()?;
                 return Some(Formula::Not(Box::new(inner)));
@@ -105,18 +112,12 @@ impl Parser {
 
         let name = match self.tokens.next() { Some(Token::Ident(s)) => s, _ => return None };
 
-        if let Some(Token::Symbol(s)) = self.tokens.peek() {
-            if s == "=" {
-                self.tokens.next();
-                let lhs = Term::Var(name);
-                let rhs = self.parse_term()?;
-                return Some(Formula::Eq(lhs, rhs));
-            }
-        }
-
         let mut args = Vec::new();
+        let mut is_complex = false;
+        
         if let Some(Token::Symbol(s)) = self.tokens.peek() {
             if s == "(" {
+                is_complex = true;
                 self.tokens.next();
                 while let Some(t) = self.parse_term() {
                     args.push(t);
@@ -124,11 +125,24 @@ impl Parser {
                     break;
                 }
                 self.consume(")");
-                return Some(Formula::Pred(name, args));
             }
         }
+
+        if let Some(Token::Symbol(s)) = self.tokens.peek() {
+            if s == "=" {
+                self.tokens.next();
+                let lhs = if is_complex { Term::Apply(name, args) } else { Term::Var(name) };
+                let rhs = self.parse_term()?;
+                return Some(Formula::Eq(lhs, rhs));
+            }
+        }
+
+        if is_complex {
+            return Some(Formula::Pred(name, args));
+        }
+
         while let Some(Token::Ident(_)) = self.tokens.peek() {
-            if let Some(t) = self.parse_term() { args.push(t); }
+             if let Some(t) = self.parse_term() { args.push(t); }
         }
         Some(Formula::Pred(name, args))
     }

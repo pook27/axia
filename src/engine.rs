@@ -34,7 +34,7 @@ impl Formula {
             Formula::Pred(n, args) => Formula::Pred(n.clone(), args.iter().map(|a| a.substitute(bindings)).collect()),
             Formula::And(l, r) => Formula::And(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
             Formula::Or(l, r) => Formula::Or(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
-            Formula::Not(inner) => Formula::Not(Box::new(inner.substitute(bindings))),
+            Formula::Not(i) => Formula::Not(Box::new(i.substitute(bindings))),
             Formula::Implies(l, r) => Formula::Implies(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
         }
     }
@@ -54,7 +54,7 @@ impl Formula {
                 Self::unify_term(l1, l2, bindings) && Self::unify_term(r1, r2, bindings)
             },
             (Formula::Not(i1), Formula::Not(i2)) => i1.unify_inner(i2, bindings),
-            (Formula::Or(l1, r1), Formula::Or(l2, r2)) => { l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings) },
+            (Formula::Or(l1, r1), Formula::Or(l2, r2)) => l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
             (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) => l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
             _ => false 
         }
@@ -63,8 +63,12 @@ impl Formula {
     fn unify_term(p: &Term, t: &Term, bindings: &mut Bindings) -> bool {
         match (p, t) {
             (Term::Var(n), val) | (val, Term::Var(n)) => {
-                if let Some(existing) = bindings.get(n) { existing == val } 
-                else { bindings.insert(n.clone(), val.clone()); true }
+                if let Some(existing) = bindings.get(n).cloned() {
+                    Self::unify_term(&existing, val, bindings)
+                } else { 
+                    bindings.insert(n.clone(), val.clone()); 
+                    true 
+                }
             },
             (Term::Const(a), Term::Const(b)) => a == b,
             (Term::Apply(n1, a1), Term::Apply(n2, a2)) => {
@@ -75,47 +79,77 @@ impl Formula {
     }
 }
 
-pub fn prove(goal: &Formula, axioms: &[Axiom], depth: u32) -> Option<ProofStep> {
-    if depth > 20 { return None; }
+pub fn prove(goal: &Formula, axioms: &[Axiom], max_depth: u32) -> Option<ProofStep> {
+    for depth in 1..=max_depth {
+        // Start with empty bindings
+        if let Some((proof, _)) = prove_dfs(goal, axioms, depth, &HashMap::new(), &vec![]) {
+            return Some(proof);
+        }
+    }
+    None
+}
 
-if let Formula::And(left, right) = goal {
-        let p1 = prove(left, axioms, depth)?;
-        let p2 = prove(right, axioms, depth)?;
-        return Some(ProofStep {
-            goal: goal.clone(),
-            rule_name: "Conjunction".to_string(),
-            sub_proofs: vec![p1, p2],
-        });
+fn prove_dfs(
+    goal: &Formula, 
+    axioms: &[Axiom], 
+    depth: u32, 
+    bindings: &Bindings, 
+    path: &Vec<Formula>
+) -> Option<(ProofStep, Bindings)> {
+    if depth == 0 { return None; }
+
+    let current_goal = goal.substitute(bindings);
+
+    if path.contains(&current_goal) { return None; }
+    let mut new_path = path.clone();
+    new_path.push(current_goal.clone());
+
+    if let Formula::And(left, right) = &current_goal {
+        let (p1, b1) = prove_dfs(left, axioms, depth, bindings, &new_path)?;
+
+        let right_sub = right.substitute(&b1);
+        let (p2, b2) = prove_dfs(&right_sub, axioms, depth, &b1, &new_path)?;
+
+        return Some((
+                ProofStep { goal: current_goal.clone(), rule_name: "Conjunction".to_string(), sub_proofs: vec![p1, p2] },
+                b2 // Return combined knowledge
+        ));
     }
 
-    if let Formula::Or(left, right) = goal {
-        if let Some(p1) = prove(left, axioms, depth) {
-            return Some(ProofStep {
-                goal: goal.clone(),
-                rule_name: "Disjunction_Left".to_string(),
-                sub_proofs: vec![p1],
-            });
+    if let Formula::Or(left, right) = &current_goal {
+        if let Some((p1, b1)) = prove_dfs(left, axioms, depth, bindings, &new_path) {
+            return Some((ProofStep { goal: current_goal.clone(), rule_name: "Disjunction_Left".to_string(), sub_proofs: vec![p1] }, b1));
         }
-        if let Some(p2) = prove(right, axioms, depth) {
-            return Some(ProofStep {
-                goal: goal.clone(),
-                rule_name: "Disjunction_Right".to_string(),
-                sub_proofs: vec![p2],
-            });
+        if let Some((p2, b2)) = prove_dfs(right, axioms, depth, bindings, &new_path) {
+            return Some((ProofStep { goal: current_goal.clone(), rule_name: "Disjunction_Right".to_string(), sub_proofs: vec![p2] }, b2));
         }
     }
 
     for axiom in axioms {
-        if let Some(bindings) = axiom.conclusion.unify(goal) {
-            let required_premises: Vec<Formula> = axiom.premises.iter().map(|p| p.substitute(&bindings)).collect();
+        if let Some(new_bindings) = axiom.conclusion.unify(&current_goal) {
+            let mut total_bindings = bindings.clone();
+            total_bindings.extend(new_bindings);
+
             let mut sub_proofs = Vec::new();
             let mut possible = true;
-            for premise in required_premises {
-                if let Some(p) = prove(&premise, axioms, depth + 1) { sub_proofs.push(p); } 
-                else { possible = false; break; }
+
+            for premise in &axiom.premises {
+                let p_sub = premise.substitute(&total_bindings);
+
+                if let Some((proof, b_out)) = prove_dfs(&p_sub, axioms, depth - 1, &total_bindings, &new_path) {
+                    sub_proofs.push(proof);
+                    total_bindings.extend(b_out); // Update knowledge for next premise
+                } else {
+                    possible = false;
+                    break;
+                }
             }
+
             if possible {
-                return Some(ProofStep { goal: goal.clone(), rule_name: axiom.name.clone(), sub_proofs });
+                return Some((
+                        ProofStep { goal: current_goal.clone(), rule_name: axiom.name.clone(), sub_proofs },
+                        total_bindings
+                ));
             }
         }
     }
