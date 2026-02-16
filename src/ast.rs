@@ -11,13 +11,16 @@ pub enum Term {
 pub enum Formula {
     Eq(Term, Term),
     Pred(String, Vec<Term>),
-    And(Box<Formula>, Box<Formula>), 
+    And(Box<Formula>, Box<Formula>),
+    Or(Box<Formula>, Box<Formula>),
+    Not(Box<Formula>),
+    Implies(Box<Formula>, Box<Formula>),
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
     TypeDecl(String), 
-    PredDecl(String, Vec<String>), 
+    PredDecl(String, ()), 
     AxiomDecl {
         name: String,
         vars: Vec<(String, String)>,
@@ -56,6 +59,9 @@ impl fmt::Display for Formula {
                 write!(f, ")")
             },
             Formula::And(left, right) => write!(f, "({}) ∧ ({})", left, right),
+            Formula::Or(l, r) => write!(f, "({}) ∨ ({})", l, r),
+            Formula::Not(inner) => write!(f, "¬({})", inner),
+            Formula::Implies(l, r) => write!(f, "({}) → ({})", l, r),
         }
     }
 }

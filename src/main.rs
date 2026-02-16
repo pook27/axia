@@ -16,6 +16,14 @@ fn add_axiom(name: String, vars: Vec<String>, formula: Formula, axioms: &mut Vec
             add_axiom(format!("{}_L", name), vars.clone(), *left, axioms);
             add_axiom(format!("{}_R", name), vars, *right, axioms);
         },
+        Formula::Implies(premise, conclusion) => {
+            axioms.push(Axiom {
+                name,
+                vars,
+                premises: vec![*premise], // The LHS is the premise
+                conclusion: *conclusion,  // The RHS is the conclusion
+            });
+        },
         _ => {
             axioms.push(Axiom { name, vars, premises: vec![], conclusion: formula });
         }
@@ -69,6 +77,19 @@ fn process_line(input: &str, axioms: &mut Vec<Axiom>) {
              }
          } else {
              println!("Could not parse goal.");
+         }
+         return;
+    }
+
+    if trimmed.starts_with("assert ") {
+         let fact_str = trimmed.trim_start_matches("assert ").trim();
+         let tokens = lex(fact_str);
+         let mut parser = Parser::new(tokens);
+         if let Some(f) = parser.parse_formula() {
+             axioms.push(Axiom { name: "Fact".to_string(), vars: vec![], premises: vec![], conclusion: f });
+             println!("Fact added.");
+         } else {
+             println!("Could not parse fact.");
          }
          return;
     }

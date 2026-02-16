@@ -33,6 +33,9 @@ impl Formula {
             Formula::Eq(l, r) => Formula::Eq(l.substitute(bindings), r.substitute(bindings)),
             Formula::Pred(n, args) => Formula::Pred(n.clone(), args.iter().map(|a| a.substitute(bindings)).collect()),
             Formula::And(l, r) => Formula::And(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
+            Formula::Or(l, r) => Formula::Or(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
+            Formula::Not(inner) => Formula::Not(Box::new(inner.substitute(bindings))),
+            Formula::Implies(l, r) => Formula::Implies(Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
         }
     }
 
@@ -50,6 +53,9 @@ impl Formula {
             (Formula::Eq(l1, r1), Formula::Eq(l2, r2)) => {
                 Self::unify_term(l1, l2, bindings) && Self::unify_term(r1, r2, bindings)
             },
+            (Formula::Not(i1), Formula::Not(i2)) => i1.unify_inner(i2, bindings),
+            (Formula::Or(l1, r1), Formula::Or(l2, r2)) => { l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings) },
+            (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) => l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
             _ => false 
         }
     }
@@ -70,9 +76,9 @@ impl Formula {
 }
 
 pub fn prove(goal: &Formula, axioms: &[Axiom], depth: u32) -> Option<ProofStep> {
-    if depth > 10 { return None; }
-    
-    if let Formula::And(left, right) = goal {
+    if depth > 20 { return None; }
+
+if let Formula::And(left, right) = goal {
         let p1 = prove(left, axioms, depth)?;
         let p2 = prove(right, axioms, depth)?;
         return Some(ProofStep {
@@ -82,17 +88,32 @@ pub fn prove(goal: &Formula, axioms: &[Axiom], depth: u32) -> Option<ProofStep> 
         });
     }
 
+    if let Formula::Or(left, right) = goal {
+        if let Some(p1) = prove(left, axioms, depth) {
+            return Some(ProofStep {
+                goal: goal.clone(),
+                rule_name: "Disjunction_Left".to_string(),
+                sub_proofs: vec![p1],
+            });
+        }
+        if let Some(p2) = prove(right, axioms, depth) {
+            return Some(ProofStep {
+                goal: goal.clone(),
+                rule_name: "Disjunction_Right".to_string(),
+                sub_proofs: vec![p2],
+            });
+        }
+    }
+
     for axiom in axioms {
         if let Some(bindings) = axiom.conclusion.unify(goal) {
             let required_premises: Vec<Formula> = axiom.premises.iter().map(|p| p.substitute(&bindings)).collect();
             let mut sub_proofs = Vec::new();
-            
             let mut possible = true;
             for premise in required_premises {
                 if let Some(p) = prove(&premise, axioms, depth + 1) { sub_proofs.push(p); } 
                 else { possible = false; break; }
             }
-            
             if possible {
                 return Some(ProofStep { goal: goal.clone(), rule_name: axiom.name.clone(), sub_proofs });
             }
