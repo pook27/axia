@@ -1,0 +1,28 @@
+-- PEANO ARITHMETIC KERNEL
+
+Nat : Type
+
+-- 1. Equality Axioms (Crucial for computation)
+-- Reflexivity: x = x
+Eq_Refl : forall x : Nat, x = x
+
+-- Symmetry: x = y -> y = x
+Eq_Symm : forall x y : Nat, x = y -> y = x
+
+-- Transitivity: If x = y and y = z, then x = z
+-- This allows the engine to chain multiple calculation steps together.
+Eq_Trans : forall x y z : Nat, x = y and y = z -> x = z
+
+
+-- 2. Definition of Addition
+-- Base Case: n + 0 = n
+Add_Zero : forall n : Nat, Add(n, 0) = n
+
+-- Recursive Case: n + S(m) = S(n + m)
+-- (e.g., 5 + 3 is the Successor of 5 + 2)
+Add_Succ : forall n m : Nat, Add(n, S(m)) = S(Add(n, m))
+
+
+-- 3. Compatibility Rules (Congruence)
+-- If a = b, then S(a) = S(b)
+Cong_Succ : forall a b : Nat, a = b -> S(a) = S(b)

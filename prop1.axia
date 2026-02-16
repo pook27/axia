@@ -1,0 +1,34 @@
+-- PROPOSITION 1: EQUILATERAL TRIANGLE
+
+-- 1. Setup Types
+Pt : Type
+Circle : Type
+
+-- 2. Predicates
+OnCirc : Pt -> Circle -> Prop
+Center : Pt -> Circle -> Prop
+DistEq : Pt -> Pt -> Pt -> Pt -> Prop
+
+-- 3. Constructors
+Circ : Pt -> Pt -> Circle
+IntersectAt : Circle -> Circle -> Pt
+
+-- 4. Axioms of Construction
+
+-- Axiom: A point is on the circle defined by itself and the center
+Ax_Radius : forall a b : Pt, OnCirc(b, Circ(a, b))
+
+-- Axiom: All radii of the same circle are equal
+Ax_Radii_Eq : forall center edge x : Pt, OnCirc(x, Circ(center, edge)) -> DistEq(center, x, center, edge)
+
+-- 4.1. THE MISSING LINK (Intersections)
+-- We must explicitly tell the computer that the intersection point is ON the circles
+Ax_Int_L : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c1)
+Ax_Int_R : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c2)
+
+-- Axiom: Euclidean Common Notion 1 (Equality is Transitive)
+-- "If AC=AB and BC=BA, then AC=BC"
+Ax_Transitivity : forall a b c : Pt, DistEq(a, c, a, b) and DistEq(b, c, b, a) -> DistEq(a, c, b, c)
+
+-- 5. The Scenario (Implicit)
+-- We are proving that for the intersection C, AC = BC.

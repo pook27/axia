@@ -20,11 +20,19 @@ fn add_axiom(name: String, vars: Vec<String>, formula: Formula, axioms: &mut Vec
             add_axiom(format!("{}_R", name), vars, *right, axioms);
         },
         Formula::Implies(premise, conclusion) => {
+            let mut premises = vec![*premise];
+            let mut current = *conclusion;
+
+            while let Formula::Implies(p, c) = current {
+                premises.push(*p);
+                current = *c;
+            }
+
             axioms.push(Axiom {
                 name,
                 vars,
-                premises: vec![*premise],
-                conclusion: *conclusion,
+                premises,      // Now gets [x=y, y=z]
+                conclusion: current,  // Gets x=z
             });
         },
         _ => {

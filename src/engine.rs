@@ -65,6 +65,7 @@ impl Formula {
             },
             (Formula::Not(i1), Formula::Not(i2)) => i1.unify_inner(i2, bindings),
             (Formula::Or(l1, r1), Formula::Or(l2, r2)) => l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
+            (Formula::And(l1, r1), Formula::And(l2, r2)) => {l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings)},
             (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) => l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
             _ => false 
         }
