@@ -30,14 +30,38 @@ fn add_axiom(name: String, vars: Vec<String>, formula: Formula, axioms: &mut Vec
     }
 }
 
-fn print_proof(step: &engine::ProofStep, depth: usize) {
+fn explain_proof(step: &engine::ProofStep, depth: usize) {
     let indent = "  ".repeat(depth);
+    
     if step.sub_proofs.is_empty() {
-        println!("{}• Fact: {} (By {})", indent, step.goal, step.rule_name);
-    } else {
-        println!("{}• Prove: {}", indent, step.goal);
-        println!("{}  Strategy: Apply {}", indent, step.rule_name);
-        for sub in &step.sub_proofs { print_proof(sub, depth + 1); }
+        if step.rule_name.starts_with("Fact") || step.rule_name == "Given" {
+            println!("{}We know that {} is true.", indent, step.goal);
+        } else {
+            let clean_rule = step.rule_name.split('_').next().unwrap_or(&step.rule_name);
+            println!("{}By applying {}, we can see that {}.", indent, clean_rule, step.goal);
+        }
+    } 
+    else {
+        if step.rule_name == "Conjunction" {
+            println!("{}To prove {}, we must prove two things:", indent, step.goal);
+        } else if step.rule_name.starts_with("Disjunction") {
+            println!("{}To show {}, we will attempt to show the {} side:", indent, step.goal, 
+                if step.rule_name.ends_with("Left") { "left" } else { "right" });
+        } else {
+            println!("{}Goal: {}.", indent, step.goal);
+            println!("{}Strategy: Apply {}.", indent, step.rule_name);
+        }
+
+        for (i, sub) in step.sub_proofs.iter().enumerate() {
+            if step.sub_proofs.len() > 1 {
+                println!("{}Step {}:", indent, i + 1);
+            }
+            explain_proof(sub, depth + 1);
+        }
+        
+        if depth == 0 {
+            println!("Therefore, the proof is complete. Q.E.D.");
+        }
     }
 }
 
@@ -71,7 +95,7 @@ fn process_line(input: &str, axioms: &mut Vec<Axiom>) {
              println!("Goal: {}", goal);
              if let Some(proof) = prove(&goal, axioms, 0) {
                  println!("\n--- Q.E.D. ---");
-                 print_proof(&proof, 0);
+                 explain_proof(&proof, 0);
              } else {
                  println!("No proof found.");
              }
