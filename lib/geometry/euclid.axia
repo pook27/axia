@@ -1,0 +1,43 @@
+-- ==========================================
+-- EUCLIDEAN GEOMETRY FOUNDATIONS
+-- ==========================================
+
+import logic
+
+-- 1. Primitives
+Pt     : Type
+Line   : Type
+Circle : Type
+
+-- 2. Predicates / Relations
+On        : Pt -> Line -> Prop
+OnCirc    : Pt -> Circle -> Prop
+DistEq    : Pt -> Pt -> Pt -> Pt -> Prop
+Parallel  : Line -> Line -> Prop
+Intersect : Line -> Line -> Prop
+
+-- 3. Constructors (Functions)
+LineFrom    : Pt -> Pt -> Line
+Circ        : Pt -> Pt -> Circle
+IntersectAt : Circle -> Circle -> Pt
+
+-- ------------------------------------------
+-- 4. Postulates
+-- ------------------------------------------
+
+-- Postulate 1: A line can be drawn between any two points
+Ax_Post1_L : forall a b : Pt, On(a, LineFrom(a, b))
+Ax_Post1_R : forall a b : Pt, On(b, LineFrom(a, b))
+
+-- Postulate 3: A circle can be drawn with any center and radius
+Ax_Radius   : forall a b : Pt, OnCirc(b, Circ(a, b))
+Ax_Radii_Eq : forall center edge x : Pt, OnCirc(x, Circ(center, edge)) -> DistEq(center, x, center, edge)
+
+-- Intersection Definition
+Ax_Int_L : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c1)
+Ax_Int_R : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c2)
+
+-- The Parallel Postulate (Dichotomy)
+Ax_NotPar    : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
+Ax_Par       : forall l m : Line, Parallel(l, m) -> not Intersect(l, m)
+Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)

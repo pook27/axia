@@ -2,14 +2,16 @@ mod ast;
 mod parser;
 mod engine;
 
-use std::fs::File;
+use std::path::Path;
+use std::fs::{self, File};
+
 use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use parser::{lex, Parser};
 use ast::{Statement, Formula, Sort};
-use engine::{Axiom, Universe, ProofStep, prove};
+use engine::{Axiom, Universe, ProofStep, prove, forward_deduce};
 use colored::Colorize;
 // ---------------------------------------------------------------------------
 // Session — named universes + active cursor
@@ -86,7 +88,7 @@ fn add_axiom(name: String, vars: Vec<String>, formula: Formula, universe: &mut U
 // Generic Proof Formatter
 // ---------------------------------------------------------------------------
 
-const ALIAS_THRESHOLD: usize = 25;
+const ALIAS_THRESHOLD: usize = 50;
 
 struct ProofFormatter {
     /// Maps raw `Display` string of a long Apply term → short alias.
@@ -152,8 +154,32 @@ impl ProofFormatter {
     }
 
     fn fmt_term_raw(&self, t: &ast::Term) -> String {
-        let lp = "(".truecolor(200, 200, 200).bold();
-        let rp = ")".truecolor(200, 200, 200).bold();
+        let lp = "(".bright_black().bold();
+        let rp = ")".bright_black().bold();
+
+        // If the term is a chain of S(...) ending in 0, format it as a digit.
+        let mut curr = t;
+        let mut peano_val = 0;
+        let mut is_peano = false;
+        
+        while let ast::Term::Apply(n, args) = curr {
+            if n == "S" && args.len() == 1 {
+                peano_val += 1;
+                curr = &args[0];
+            } else {
+                break;
+            }
+        }
+        if let ast::Term::Const(c) = curr {
+            if c == "0" || c == "Z" {
+                is_peano = true;
+            }
+        }
+        
+        if is_peano {
+            return peano_val.to_string().cyan().bold().to_string();
+        }
+        // ----------------------------------
         
         match t {
             ast::Term::Var(name, sort) if sort != &Sort::object() => {
@@ -272,9 +298,17 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
 
     } else if step.sub_proofs.is_empty() {
-        // Base case (Axiom or Given)
-        if step.rule_name.starts_with("Fact") || step.rule_name == "Given" {
-            println!("{}{} {}", branch, goal_text, "(Given)".bright_black());
+        // Base case — no sub-proofs: axiom/given/deduction leaf.
+        if step.rule_name.starts_with("Given ") {
+            // Named hypothesis or deduction used as a direct fact.
+            let hyp = step.rule_name.strip_prefix("Given ").unwrap_or(&step.rule_name);
+            println!("{}{} {} {}",
+                branch,
+                goal_text,
+                "(by hypothesis".bright_black(),
+                format!("{})", hyp).bright_black());
+        } else if step.rule_name.starts_with("Fact") {
+            println!("{}{} {}", branch, goal_text, "(asserted fact)".bright_black());
         } else {
             println!("{}{} (via {})", branch, goal_text, rule_label);
         }
@@ -305,6 +339,8 @@ fn print_help() {
     println!("  load <file>                         Load a .axia file into active universe");
     println!("  load <file> into <universe>         Load a file into a specific universe");
     println!("  assert <formula>                    Add a ground fact to active universe");
+    println!("  Given <Name> : <formula>            Declare a named hypothesis");
+    println!("  deduce <n>                          Forward-chain for <n> saturation steps");
     println!("  prove <formula>                     Prove a formula in active universe");
     println!("  exit                                Quit");
     println!();
@@ -323,14 +359,61 @@ fn print_help() {
 // CLI command processing
 // ---------------------------------------------------------------------------
 
+fn resolve_and_load(target: &str, session: &mut Session) -> Result<(), String> {
+    // The "Search Paths" for the module resolver
+    let possible_paths = vec![
+        target.to_string(),
+        format!("{}.axia", target),
+        format!("lib/{}", target),
+        format!("lib/{}.axia", target),
+        format!("lib/core/{}", target),
+        format!("lib/core/{}.axia", target),
+        format!("lib/geometry/{}", target),
+        format!("lib/geometry/{}.axia", target),
+    ];
+
+    let mut found_path = None;
+    for p in &possible_paths {
+        if Path::new(p).exists() {
+            found_path = Some(p.clone());
+            break;
+        }
+    }
+
+    let path_str = found_path.ok_or_else(|| format!("Could not find library or module '{}'", target))?;
+    let path = Path::new(&path_str);
+
+    if path.is_dir() {
+        // Module/Directory Loading: Load all .axia files in alphabetical order
+        println!("Loading module package '{}'...", path_str);
+        let mut entries: Vec<_> = fs::read_dir(path).unwrap().filter_map(Result::ok).collect();
+        entries.sort_by_key(|e| e.path()); 
+        
+        for entry in entries {
+            let p = entry.path();
+            if p.is_file() && p.extension().unwrap_or_default() == "axia" {
+                load_file(p.to_str().unwrap(), &session.active.clone(), session)?;
+            }
+        }
+        Ok(())
+    } else {
+        // Single File Loading
+        load_file(&path_str, &session.active.clone(), session)
+    }
+}
+
 fn load_file(filename: &str, target_name: &str, session: &mut Session) -> Result<(), String> {
     let file = File::open(filename).map_err(|_| format!("Could not open file '{}'.", filename))?;
     let reader = BufReader::new(file);
     let previous_active = session.active.clone();
     session.active = target_name.to_string();
-    for line in reader.lines().flatten() { 
-        process_line(&line, session); 
+    
+    for line_result in reader.lines() { 
+        if let Ok(line) = line_result {
+            process_line(&line, session); 
+        }
     }
+    
     session.active = previous_active;
     Ok(())
 }
@@ -407,6 +490,14 @@ fn process_line(input: &str, session: &mut Session) {
                 println!("    [{}] {} ⊢ {}", ax.name, prems.join(", "), ax.conclusion);
             }
         }
+        if !u.givens.is_empty() {
+            println!("  Givens / Deductions ({}):", u.givens.len());
+            let mut pairs: Vec<(&String, &Formula)> = u.givens.iter().collect();
+            pairs.sort_by_key(|(n, _)| n.as_str());
+            for (gname, gf) in pairs {
+                println!("    [{}] {}", gname, gf);
+            }
+        }
         return;
     }
 
@@ -430,27 +521,10 @@ fn process_line(input: &str, session: &mut Session) {
     // -----------------------------------------------------------------------
 
     if let Some(rest) = trimmed.strip_prefix("load ") {
-        let (filename, target) = if let Some(pos) = rest.rfind(" into ") {
-            (rest[..pos].trim(), Some(rest[pos + 6..].trim().to_string()))
-        } else {
-            (rest.trim(), None)
-        };
-
-        let target_name = match &target {
-            Some(name) => {
-                if !session.universes.contains_key(name.as_str()) {
-                    println!("Error: Universe '{}' does not exist. Create it first.", name);
-                    return;
-                }
-                name.clone()
-            }
-            None => session.active.clone(),
-        };
-
-        println!("Loading '{}' into universe '{}'…", filename, target_name);
-        match load_file(filename, &target_name, session) {
-            Ok(_) => println!("Done. '{}' now has {}.", target_name, session.universes[&target_name].summary()),
-            Err(e) => println!("Error: {}", e),
+        let target = rest.trim();
+        match resolve_and_load(target, session) {
+            Ok(_) => println!("Done. Module '{}' loaded.", target.green()),
+            Err(e) => println!("{}", format!("Error: {}", e).red()),
         }
         return;
     }
@@ -465,7 +539,7 @@ fn process_line(input: &str, session: &mut Session) {
         match parser.parse_formula() {
             Some(goal) => {
                 println!("{} {}  [universe: '{}']", "Goal:".blue().bold(), goal.to_string().cyan(), session.active.yellow());
-                match prove(&goal, session.current(), 10) {
+                match prove(&goal, session.current(), 20) {
                     Some(proof) => explain_proof(&proof),
                     None        => println!("{}", "No proof found.".red().bold()),
                 }
@@ -498,6 +572,45 @@ fn process_line(input: &str, session: &mut Session) {
     }
 
     // -----------------------------------------------------------------------
+    // deduce <steps>
+    //
+    // Run the forward-chaining saturation loop for up to <steps> rounds,
+    // applying every axiom whose premises are satisfied by existing givens
+    // and recording the conclusions as new named deductions.
+    // -----------------------------------------------------------------------
+
+    if let Some(rest) = trimmed.strip_prefix("deduce") {
+        // Accept both `deduce` (default 1 step) and `deduce <n>`.
+        let steps: u32 = rest.trim().parse().unwrap_or(1).max(1);
+
+        println!("{} {} {}",
+            "Running forward deduction".blue().bold(),
+            format!("({} step{})...", steps, if steps == 1 { "" } else { "s" }).bright_black(),
+            format!("[universe: '{}']", session.active).yellow(),
+        );
+
+        let discoveries = forward_deduce(session.current_mut(), steps);
+
+        if discoveries.is_empty() {
+            println!("{}", "  No new facts discovered (fixpoint reached).".bright_black());
+        } else {
+            println!("{} {}",
+                format!("  {} new fact{} discovered:", discoveries.len(),
+                    if discoveries.len() == 1 { "" } else { "s" }).green().bold(),
+                "".normal(),
+            );
+            for (name, formula) in &discoveries {
+                println!("  {} {} : {}",
+                    "◆".green(),
+                    name.yellow().bold(),
+                    formula.to_string().cyan(),
+                );
+            }
+        }
+        return;
+    }
+
+    // -----------------------------------------------------------------------
     // Bare declaration (TypeDecl / ConstDecl / PredDecl / AxiomDecl / Import)
     // -----------------------------------------------------------------------
 
@@ -505,34 +618,39 @@ fn process_line(input: &str, session: &mut Session) {
     let mut parser = Parser::with_universe(tokens, Some(session.current()));
     match parser.parse_statement() {
         Some(Statement::TypeDecl(n)) => {
+            session.current_mut().add_type(n.clone());
             println!("{} {}", "Defined Type:".yellow(), n.cyan().bold());
         }
         Some(Statement::ConstDecl(n, sort)) => {
+            session.current_mut().add_constant(n.clone(), sort.clone());
             println!("{} {} : {}", "Defined Constant:".yellow(), n.cyan().bold(), sort.to_string().cyan());
         }
         Some(Statement::PredDecl(n, arg_sorts, ret_sort)) => {
+            let arg_strs: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
+            session.current_mut().add_predicate(n.clone(), arg_strs, ret_sort.0.clone());
+            
             let sig: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
             let sig_str = if sig.is_empty() { "".to_string() } else { format!(" : {} → ", sig.join(" → ")) };
             println!("{} {}{}{}", "Defined Function/Predicate:".yellow(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
         }
         Some(Statement::AxiomDecl { name, vars, body }) => {
+            let vars_pure: Vec<String> = vars.iter().map(|(n, _)| n.clone()).collect();
+            add_axiom(name.clone(), vars_pure, body, session.current_mut());
+            
             let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", v.cyan(), s.to_string().cyan())).collect();
             let vars_display = if var_strs.is_empty() { "".to_string() } else { format!(" [∀ {}]", var_strs.join(", ")) };
-            add_axiom(name.clone(), vars.iter().map(|(v,_)| v.clone()).collect(), body, session.current_mut());
             println!("{} {}{}", "Added Axiom:".yellow(), name.yellow().bold(), vars_display.bright_black());
         }
         Some(Statement::Import(src)) => {
-            let core_path = format!("lib/core/{}.axia", src);
-            let geom_path = format!("lib/geometry/{}.axia", src);
-            let active = session.active.clone();
-
-            if load_file(&core_path, &active, session).is_ok() {
-                // Success
-            } else if load_file(&geom_path, &active, session).is_ok() {
-                // Success
-            } else {
-                println!("Error: Could not find library '{}' in lib/core/ or lib/geometry/", src);
+            if let Err(e) = resolve_and_load(&src, session) {
+                println!("{}", format!("Error importing '{}': {}", src, e).red());
             }
+        }
+        Some(Statement::GivenDecl(name, formula)) => {
+            session.current_mut().add_given(name.clone(), formula.clone());
+            println!("{} {}",
+                "Added Given:".green().bold(),
+                name.cyan().bold());
         }
         None => println!("{}", format!("Parse error: {}", trimmed).red()),
     }
@@ -543,13 +661,27 @@ fn process_line(input: &str, session: &mut Session) {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
     let mut session = Session::new();
-    let mut rl = DefaultEditor::new().expect("Failed to init readline");
 
-    // Load persistent history from the previous session!
+    // -------------------------------------------------------------------
+    // COMPILER MODE (File input)
+    // -------------------------------------------------------------------
+    if args.len() > 1 {
+        let filename = &args[1];
+        if let Err(e) = resolve_and_load(filename, &mut session) {
+            eprintln!("{}", format!("Error: {}", e).red());
+        }
+        return;
+    }
+
+    // -------------------------------------------------------------------
+    // REPL MODE
+    // -------------------------------------------------------------------
+    let mut rl = DefaultEditor::new().expect("Failed to init readline");
     let _ = rl.load_history(".axia_history");
 
-    println!("{}", "\n--- Axia Kernel v0.8 ---".yellow().bold());
+    println!("{}", "\n--- Axia Kernel v0.9 ---".yellow().bold());
     println!("Active universe: 'default'  |  type `help` for commands");
 
     loop {

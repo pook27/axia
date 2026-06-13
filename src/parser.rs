@@ -24,7 +24,7 @@ pub fn lex(input: &str) -> Vec<Token> {
 
             // Single-character symbols — including ∃ which is now a first-class
             // quantifier in formulas (not just in axiom headers).
-            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '→' | '=' | '∨' | '¬' | '!' | '|' => {
+            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '→' | '=' | '∨' | '¬' | '!' | '|' | '+' | '*' | '/' => {
                 tokens.push(Token::Symbol(c.to_string()));
                 chars.next();
             }
@@ -37,6 +37,8 @@ pub fn lex(input: &str) -> Vec<Token> {
                 } else if let Some(&'-') = chars.peek() {
                     // Line comment: skip to end of line
                     while let Some(&x) = chars.peek() { if x == '\n' { break; } chars.next(); }
+                } else {
+                    tokens.push(Token::Symbol("-".to_string()));
                 }
             }
 
@@ -47,6 +49,7 @@ pub fn lex(input: &str) -> Vec<Token> {
                 }
                 match s.as_str() {
                     "class" | "where" | "Type" | "Prop" | "forall" | "exists" | "import"
+                    | "Given"
                         => tokens.push(Token::Keyword(s)),
                     "and" => tokens.push(Token::Symbol("∧".to_string())),
                     "or"  => tokens.push(Token::Symbol("∨".to_string())),
@@ -81,12 +84,25 @@ impl<'a> Parser<'a> {
 
     /// Resolve a bare identifier to either `Term::Const` (if it is registered
     /// in the universe's constant table) or `Term::Var` (otherwise).
+    /// Resolve a bare identifier to either a Peano number, `Term::Const`, or `Term::Var`.
     fn ident_to_term(&self, name: String) -> Term {
+        // 1. Syntactic Sugar: Parse digits as Peano numbers (e.g. 3 -> S(S(S(0))))
+        if let Ok(n) = name.parse::<u32>() {
+            let mut term = Term::Const("0".to_string());
+            for _ in 0..n {
+                term = Term::Apply("S".to_string(), vec![term]);
+            }
+            return term;
+        }
+
+        // 2. Check if it's a registered constant in the universe
         if let Some(u) = self.universe {
             if u.constants.contains_key(&name) {
                 return Term::Const(name);
             }
         }
+        
+        // 3. Otherwise, it's a free variable
         Term::Var(name, Sort::object())
     }
 
@@ -224,67 +240,112 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_atom(&mut self) -> Option<Formula> {
-        // Parenthesised formula
+        // Parentheses ambiguity: Is it a formula `(A ∧ B)` or a term `(2 + 2) = 4`?
         if self.peek_sym("(") {
-            self.tokens.next();
-            let f = self.parse_formula()?;
-            self.consume_sym(")");
-            return Some(f);
-        }
-
-        // Must start with an identifier
-        let name = match self.tokens.next() {
-            Some(Token::Ident(s)) => s,
-            _ => return None,
-        };
-
-        let mut args: Vec<Term> = Vec::new();
-        let mut is_call = false;
-
-        if self.peek_sym("(") {
-            is_call = true;
-            self.tokens.next();
-            while let Some(t) = self.parse_term() {
-                args.push(t);
-                if self.peek_sym(",") { self.tokens.next(); continue; }
-                break;
+            let fallback = self.tokens.clone();
+            self.tokens.next(); // consume '('
+            if let Some(f) = self.parse_formula() {
+                if self.consume_sym(")") {
+                    // LOOKAHEAD: If the next token is a math operator, this was a Math Term, not a Logical Formula!
+                    let is_math_cont = self.peek_sym("+") || self.peek_sym("-") || 
+                                       self.peek_sym("*") || self.peek_sym("/") || 
+                                       self.peek_sym("=");
+                    if !is_math_cont {
+                        return Some(f);
+                    }
+                }
             }
-            self.consume_sym(")");
+            // If it failed or it continues with math, restore state and parse as a Term!
+            self.tokens = fallback;
         }
 
-        // Equality: `name = rhs` or `f(...) = rhs`
+        // Parse the left-hand side as a full mathematical term
+        let lhs = self.parse_term()?;
+
+        // If it's followed by an equals sign, it's an equation
         if self.peek_sym("=") {
             self.tokens.next();
-            let lhs = if is_call {
-                Term::Apply(name, args)
-            } else {
-                self.ident_to_term(name)
-            };
             let rhs = self.parse_term()?;
             return Some(Formula::Eq(lhs, rhs));
         }
 
-        if is_call {
-            return Some(Formula::Pred(name, args));
+        // If no equals sign, promote the Term back into a logical Predicate
+        match lhs {
+            Term::Apply(name, args) => Some(Formula::Pred(name, args)),
+            Term::Var(name, _) | Term::Const(name) => {
+                let mut args = Vec::new();
+                // Support juxtaposition `On Point Line`
+                while let Some(Token::Ident(_)) = self.tokens.peek() {
+                    if let Some(t) = self.parse_term() { args.push(t); } else { break; }
+                }
+                Some(Formula::Pred(name, args))
+            }
         }
-
-        // Juxtaposition-style predicate: `Pred x y`
-        while let Some(Token::Ident(_)) = self.tokens.peek() {
-            if let Some(t) = self.parse_term() { args.push(t); }
-        }
-        Some(Formula::Pred(name, args))
     }
 
     // ------------------------------------------------------------------
     // Term parsing
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // Term parsing (Recursive Descent for Operator Precedence)
+    // ------------------------------------------------------------------
+
     pub fn parse_term(&mut self) -> Option<Term> {
+        self.parse_term_add()
+    }
+
+    fn parse_term_add(&mut self) -> Option<Term> {
+        let mut left = self.parse_term_mul()?;
+        while let Some(Token::Symbol(s)) = self.tokens.peek() {
+            if s == "+" {
+                self.tokens.next();
+                let right = self.parse_term_mul()?;
+                left = Term::Apply("Add".to_string(), vec![left, right]);
+            } else if s == "-" {
+                self.tokens.next();
+                let right = self.parse_term_mul()?;
+                left = Term::Apply("Sub".to_string(), vec![left, right]);
+            } else {
+                break;
+            }
+        }
+        Some(left)
+    }
+
+    fn parse_term_mul(&mut self) -> Option<Term> {
+        let mut left = self.parse_term_primary()?;
+        while let Some(Token::Symbol(s)) = self.tokens.peek() {
+            if s == "*" {
+                self.tokens.next();
+                let right = self.parse_term_primary()?;
+                left = Term::Apply("Mul".to_string(), vec![left, right]);
+            } else if s == "/" {
+                self.tokens.next();
+                let right = self.parse_term_primary()?;
+                left = Term::Apply("Div".to_string(), vec![left, right]);
+            } else {
+                break;
+            }
+        }
+        Some(left)
+    }
+
+    fn parse_term_primary(&mut self) -> Option<Term> {
+        // Handle parentheses grouping for terms: (x + y)
+        if self.peek_sym("(") {
+            self.tokens.next();
+            let t = self.parse_term()?;
+            self.consume_sym(")");
+            return Some(t);
+        }
+
         let name = match self.tokens.next() {
             Some(Token::Ident(s)) => s,
             _ => return None,
         };
 
+        // Function call: f(x, y)
         if self.peek_sym("(") {
             self.tokens.next();
             let mut args = Vec::new();
@@ -313,6 +374,21 @@ impl<'a> Parser<'a> {
                 _ => return None,
             };
             return Some(Statement::Import(universe_name));
+        }
+
+        // `Given <Name> : <Formula>`
+        //
+        // Parsed as a keyword arm before the generic Ident path so that
+        // "Given" is never mistaken for a type/constant/predicate name.
+        if self.peek_kw("Given") {
+            self.tokens.next(); // consume `Given`
+            let hyp_name = match self.tokens.next() {
+                Some(Token::Ident(n)) => n,
+                _ => return None,
+            };
+            if !self.consume_sym(":") { return None; }
+            let formula = self.parse_formula()?;
+            return Some(Statement::GivenDecl(hyp_name, formula));
         }
 
         let name = match self.tokens.peek() {

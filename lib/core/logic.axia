@@ -1,8 +1,10 @@
--- CORE LOGIC AXIOMS
+-- ==========================================
+-- CORE LOGIC & EQUALITY
+-- ==========================================
 
 Object : Type
 
 -- 1. Equality Axioms
-Eq_Refl : forall x : Object, x = x
-Eq_Symm : forall x y : Object, x = y -> y = x
+Eq_Refl  : forall x : Object, x = x
+Eq_Symm  : forall x y : Object, x = y -> y = x
 Eq_Trans : forall x y z : Object, x = y and y = z -> x = z

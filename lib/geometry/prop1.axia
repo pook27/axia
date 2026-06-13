@@ -1,9 +1,0 @@
--- PROPOSITION 1: EQUILATERAL TRIANGLE
-
-import base
-
--- 0. The specific givens for this problem
-A : Pt
-B : Pt
-
--- (The engine will now figure out the rest using base.axia)

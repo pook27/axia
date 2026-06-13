@@ -62,6 +62,11 @@ pub enum Statement {
     },
     /// `import <universe_name>` — pull all axioms from another universe.
     Import(String),
+    /// `Given <Name> : <Formula>` — a named hypothesis assumed true in this
+    /// universe.  Unlike `AxiomDecl`, a Given has no universally-quantified
+    /// variables; it is a fully ground (or already-instantiated) fact that
+    /// the engine can use as a direct forward lookup during proof search.
+    GivenDecl(String, Formula),
 }
 
 // ---------------------------------------------------------------------------

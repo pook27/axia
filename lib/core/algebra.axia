@@ -1,0 +1,72 @@
+-- ==========================================
+-- ALGEBRA: Naturals and Integers
+-- ==========================================
+
+import logic
+
+-- ------------------------------------------
+-- PART 1: PEANO ARITHMETIC (Naturals)
+-- ------------------------------------------
+Nat : Type
+0 : Nat
+
+-- Successor and Addition
+S : Nat -> Nat
+Add : Nat -> Nat -> Nat
+
+Add_Zero : forall n : Nat, Add(n, 0) = n
+Add_Succ : forall n m : Nat, Add(n, S(m)) = S(Add(n, m))
+
+-- Subtraction (Truncated: n - 0 = n, S(n) - S(m) = n - m, 0 - n = 0)
+Sub : Nat -> Nat -> Nat
+Sub_Zero   : forall n : Nat, Sub(n, 0) = n
+Sub_Zero_L : forall n : Nat, Sub(0, n) = 0
+Sub_Succ   : forall n m : Nat, Sub(S(n), S(m)) = Sub(n, m)
+
+-- Subtraction Congruence Rules
+Cong_Sub_L : forall a b c : Nat, a = b -> Sub(a, c) = Sub(b, c)
+Cong_Sub_R : forall a b c : Nat, a = b -> Sub(c, a) = Sub(c, b)
+
+-- Multiplication
+Mul : Nat -> Nat -> Nat
+Mul_Zero : forall n : Nat, Mul(n, 0) = 0
+Mul_Succ : forall n m : Nat, Mul(n, S(m)) = Add(Mul(n, m), n)
+
+-- Arithmetic Congruence Rules
+Cong_Succ  : forall a b : Nat, a = b -> S(a) = S(b)
+Cong_Add_L : forall a b c : Nat, a = b -> Add(a, c) = Add(b, c)
+Cong_Add_R : forall a b c : Nat, a = b -> Add(c, a) = Add(c, b)
+Cong_Mul_L : forall a b c : Nat, a = b -> Mul(a, c) = Mul(b, c)
+Cong_Mul_R : forall a b c : Nat, a = b -> Mul(c, a) = Mul(c, b)
+
+
+-- ------------------------------------------
+-- PART 2: INTEGERS (Equivalence Classes)
+-- ------------------------------------------
+Int : Type
+
+-- Pair(a, b) represents the integer (a - b)
+Pair : Nat -> Nat -> Int
+
+-- Equivalence: (a-b) == (c-d) if (a+d) == (b+c)
+EqInt : Int -> Int -> Prop
+Ax_EqInt : forall a b c d : Nat, Add(a, d) = Add(b, c) -> EqInt(Pair(a, b), Pair(c, d))
+
+-- Addition of integers: (a-b) + (c-d) = (a+c) - (b+d)
+AddInt : Int -> Int -> Int
+Ax_AddInt : forall a b c d : Nat, AddInt(Pair(a, b), Pair(c, d)) = Pair(Add(a, c), Add(b, d))
+
+-- Subtraction of integers: (a-b) - (c-d) = (a+d) - (b+c)
+SubInt : Int -> Int -> Int
+Ax_SubInt : forall a b c d : Nat, SubInt(Pair(a, b), Pair(c, d)) = Pair(Add(a, d), Add(b, c))
+
+-- Multiplication of integers: (a-b) * (c-d) = (ac+bd) - (ad+bc)
+MulInt : Int -> Int -> Int
+Ax_MulInt : forall a b c d : Nat, MulInt(Pair(a, b), Pair(c, d)) = Pair(Add(Mul(a, c), Mul(b, d)), Add(Mul(a, d), Mul(b, c)))
+
+-- Integer Congruence
+Cong_EqInt   : forall x y z : Int, x = y and EqInt(y, z) -> EqInt(x, z)
+Cong_AddInt  : forall x y z : Int, EqInt(x, y) -> EqInt(AddInt(x, z), AddInt(y, z))
+Cong_SubInt  : forall x y z : Int, EqInt(x, y) -> EqInt(SubInt(x, z), SubInt(y, z))
+Cong_MulInt  : forall x y z : Int, EqInt(x, y) -> EqInt(MulInt(x, z), MulInt(y, z))
+
