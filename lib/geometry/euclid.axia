@@ -1,28 +1,29 @@
 -- ==========================================
--- EUCLIDEAN GEOMETRY FOUNDATIONS
+-- EUCLIDEAN GEOMETRY: FOUNDATIONS & PROPOSITIONS
 -- ==========================================
 
 import logic
 
--- 1. Primitives
+-- ------------------------------------------
+-- 1. Primitives & Relations
+-- ------------------------------------------
 Pt     : Type
 Line   : Type
 Circle : Type
 
--- 2. Predicates / Relations
 On        : Pt -> Line -> Prop
 OnCirc    : Pt -> Circle -> Prop
 DistEq    : Pt -> Pt -> Pt -> Pt -> Prop
 Parallel  : Line -> Line -> Prop
 Intersect : Line -> Line -> Prop
 
--- 3. Constructors (Functions)
+-- Constructors (Functions)
 LineFrom    : Pt -> Pt -> Line
 Circ        : Pt -> Pt -> Circle
 IntersectAt : Circle -> Circle -> Pt
 
 -- ------------------------------------------
--- 4. Postulates
+-- 2. Euclid's Postulates
 -- ------------------------------------------
 
 -- Postulate 1: A line can be drawn between any two points
@@ -31,6 +32,7 @@ Ax_Post1_R : forall a b : Pt, On(b, LineFrom(a, b))
 
 -- Postulate 3: A circle can be drawn with any center and radius
 Ax_Radius   : forall a b : Pt, OnCirc(b, Circ(a, b))
+-- If a point is on a circle, its distance to the center equals the radius
 Ax_Radii_Eq : forall center edge x : Pt, OnCirc(x, Circ(center, edge)) -> DistEq(center, x, center, edge)
 
 -- Intersection Definition
@@ -41,3 +43,38 @@ Ax_Int_R : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c2)
 Ax_NotPar    : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
 Ax_Par       : forall l m : Line, Parallel(l, m) -> not Intersect(l, m)
 Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)
+
+-- ------------------------------------------
+-- 3. Euclid's Common Notions (Equality)
+-- ------------------------------------------
+
+-- Things which are equal to the same thing are equal to each other.
+-- (Written in A -> B -> C curried form so the forward engine evaluates sequentially)
+Ax_Dist_Trans : forall p1 p2 p3 p4 p5 p6 : Pt, DistEq(p1, p2, p3, p4) -> DistEq(p3, p4, p5, p6) -> DistEq(p1, p2, p5, p6)
+
+
+-- ==========================================
+-- BOOK 1: PROPOSITIONS
+-- ==========================================
+
+-- ------------------------------------------
+-- PROPOSITION 1: 
+-- To construct an equilateral triangle on a given finite straight line.
+-- ------------------------------------------
+
+-- Let A and B be our starting points.
+A : Pt
+B : Pt
+
+-- Let C be the intersection of a circle centered at A passing through B, 
+-- and a circle centered at B passing through A.
+C : Pt
+Given Prop1_H1 : OnCirc(C, Circ(A, B))
+Given Prop1_H2 : OnCirc(C, Circ(B, A))
+
+-- Provide the engine the geometric symmetry of the base line segment
+Given Prop1_Base_Symm : DistEq(A, B, B, A)
+
+-- Let the engine autonomously deduce the consequences of this construction!
+deduce 3
+
