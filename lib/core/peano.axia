@@ -5,7 +5,7 @@ import logic
 
 -- Types and Constants
 Nat : Type
-Z : Nat
+0 : Nat
 
 -- Successor and Addition functions
 S : Nat -> Nat
@@ -13,7 +13,7 @@ Add : Nat -> Nat -> Nat
 
 -- 1. Definition of Addition
 -- Base Case: n + 0 = n
-Add_Zero : forall n : Nat, Add(n, Z) = n
+Add_Zero : forall n : Nat, Add(n, 0) = n
 
 -- Recursive Case: n + S(m) = S(n + m)
 Add_Succ : forall n m : Nat, Add(n, S(m)) = S(Add(n, m))

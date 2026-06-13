@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 rustyline = "14.0"
+colored = "2.1.0"

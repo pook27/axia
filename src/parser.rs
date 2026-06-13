@@ -74,11 +74,6 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// Create a context-free parser (all identifiers become `Term::Var`).
-    pub fn new(tokens: Vec<Token>) -> Parser<'static> {
-        Parser { tokens: tokens.into_iter().peekable(), universe: None }
-    }
-
     /// Create a parser with access to the active universe for constant lookup.
     pub fn with_universe(tokens: Vec<Token>, universe: Option<&'a Universe>) -> Self {
         Parser { tokens: tokens.into_iter().peekable(), universe }

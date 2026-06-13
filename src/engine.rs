@@ -94,21 +94,6 @@ impl Universe {
         self.constants.insert(name, sort);
     }
 
-    pub fn import_from(&mut self, other: &Universe) {
-        for axiom in &other.axioms {
-            if !self.axioms.iter().any(|a| a.name == axiom.name) {
-                self.axioms.push(axiom.clone());
-            }
-        }
-        for type_name in &other.types { self.add_type(type_name.clone()); }
-        for (name, (args, ret)) in &other.predicates {
-            self.predicates.entry(name.clone()).or_insert_with(|| (args.clone(), ret.clone()));
-        }
-        for (name, sort) in &other.constants {
-            self.constants.entry(name.clone()).or_insert_with(|| sort.clone());
-        }
-    }
-
     pub fn summary(&self) -> String {
         format!("{} axiom(s), {} type(s), {} predicate(s), {} constant(s)",
                 self.axioms.len(), self.types.len(), self.predicates.len(), self.constants.len())

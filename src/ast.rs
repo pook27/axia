@@ -60,7 +60,6 @@ pub enum Statement {
         vars: Vec<(String, Sort)>,
         body: Formula,
     },
-    Goal(Formula),
     /// `import <universe_name>` — pull all axioms from another universe.
     Import(String),
 }

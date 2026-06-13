@@ -10,7 +10,7 @@ use rustyline::DefaultEditor;
 use parser::{lex, Parser};
 use ast::{Statement, Formula, Sort};
 use engine::{Axiom, Universe, ProofStep, prove};
-
+use colored::Colorize;
 // ---------------------------------------------------------------------------
 // Session — named universes + active cursor
 // ---------------------------------------------------------------------------
@@ -45,18 +45,6 @@ impl Session {
         if self.universes.contains_key(name) { self.active = name.to_string(); true } else { false }
     }
 
-    fn import_universe(&mut self, src_name: &str) -> Result<usize, String> {
-        if src_name == self.active {
-            return Err("Cannot import a universe into itself.".to_string());
-        }
-        let src = self.universes.get(src_name)
-            .ok_or_else(|| format!("Universe '{}' not found.", src_name))?
-            .clone();
-        let before = self.current().axioms.len();
-        self.current_mut().import_from(&src);
-        let after = self.current().axioms.len();
-        Ok(after - before)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +86,7 @@ fn add_axiom(name: String, vars: Vec<String>, formula: Formula, universe: &mut U
 // Generic Proof Formatter
 // ---------------------------------------------------------------------------
 
-const ALIAS_THRESHOLD: usize = 12;
+const ALIAS_THRESHOLD: usize = 25;
 
 struct ProofFormatter {
     /// Maps raw `Display` string of a long Apply term → short alias.
@@ -157,47 +145,74 @@ impl ProofFormatter {
 
     fn fmt_term(&self, t: &ast::Term) -> String {
         let raw = format!("{}", t);
-        if let Some(alias) = self.aliases.get(&raw) { return alias.clone(); }
+        if let Some(alias) = self.aliases.get(&raw) { 
+            return alias.cyan().bold().to_string(); 
+        }
         self.fmt_term_raw(t)
     }
 
     fn fmt_term_raw(&self, t: &ast::Term) -> String {
+        let lp = "(".truecolor(200, 200, 200).bold();
+        let rp = ")".truecolor(200, 200, 200).bold();
+        
         match t {
-            ast::Term::Var(name, sort) if sort != &Sort::object() => format!("{}:{}", name, sort),
-            ast::Term::Var(name, _)  => name.clone(),
-            ast::Term::Const(name)   => name.clone(),
+            ast::Term::Var(name, sort) if sort != &Sort::object() => {
+                format!("{}:{}", name.cyan().bold(), sort.to_string().cyan().bold())
+            }
+            ast::Term::Var(name, _)  => name.cyan().bold().to_string(),
+            ast::Term::Const(name)   => name.cyan().bold().to_string(),
             ast::Term::Apply(name, args) => {
                 let fa: Vec<String> = args.iter().map(|a| self.fmt_term(a)).collect();
-                format!("{}({})", name, fa.join(", "))
+                
+                // Binary operators get bright blue syntax highlighting
+                if args.len() == 2 {
+                    let op = match name.as_str() {
+                        "Add" => Some("+".bright_blue().bold()),
+                        "Sub" => Some("-".bright_blue().bold()),
+                        "Mul" => Some("*".bright_blue().bold()),
+                        "Div" => Some("/".bright_blue().bold()),
+                        _ => None,
+                    };
+                    if let Some(op_str) = op {
+                        return format!("{} {} {}", fa[0], op_str, fa[1]);
+                    }
+                }
+                
+                format!("{}{}{}{}", name.cyan().bold(), lp, fa.join(", "), rp)
             }
         }
     }
 
     fn fmt_formula(&self, f: &Formula) -> String {
+        let lp = "(".bright_black().bold();
+        let rp = ")".bright_black().bold();
+        let eq = "=".bright_blue().bold();
+        
         match f {
             Formula::Eq(l, r) =>
-                format!("{} = {}", self.fmt_term(l), self.fmt_term(r)),
+                format!("{} {} {}", self.fmt_term(l), eq, self.fmt_term(r)),
             Formula::Pred(name, args) => {
-                if args.is_empty() { name.clone() }
+                if args.is_empty() { name.cyan().bold().to_string() }
                 else {
                     let fa: Vec<String> = args.iter().map(|a| self.fmt_term(a)).collect();
-                    format!("{}({})", name, fa.join(", "))
+                    format!("{}{}{}{}", name.cyan().bold(), lp, fa.join(", "), rp)
                 }
             }
             Formula::And(l, r) =>
-                format!("{} AND {}", self.fmt_formula(l), self.fmt_formula(r)),
+                format!("{} {} {}", self.fmt_formula(l), "AND".magenta().bold(), self.fmt_formula(r)),
             Formula::Or(l, r) =>
-                format!("{} OR {}",  self.fmt_formula(l), self.fmt_formula(r)),
+                format!("{} {} {}", self.fmt_formula(l), "OR".magenta().bold(), self.fmt_formula(r)),
             Formula::Not(i) =>
-                format!("NOT {}", self.fmt_formula(i)),
+                format!("{} {}", "NOT".magenta().bold(), self.fmt_formula(i)),
             Formula::Implies(l, r) =>
-                format!("IF {} THEN {}", self.fmt_formula(l), self.fmt_formula(r)),
+                format!("{} {} {} {}", "IF".magenta().bold(), self.fmt_formula(l), "THEN".magenta().bold(), self.fmt_formula(r)),
             Formula::Exists { var, sort, body } => {
                 let body_str = self.fmt_formula(body);
+                let e = "∃".magenta().bold();
                 if sort == &Sort::object() {
-                    format!("∃ {}, {}", var, body_str)
+                    format!("{} {}, {}", e, var.cyan().bold(), body_str)
                 } else {
-                    format!("∃ {} : {}, {}", var, sort, body_str)
+                    format!("{} {} : {}, {}", e, var.cyan().bold(), sort.to_string().cyan().bold(), body_str)
                 }
             }
         }
@@ -220,7 +235,7 @@ fn explain_proof(step: &ProofStep) {
     let mut fmt = ProofFormatter::new();
     fmt.scan(step);
 
-    println!("\n--- Q.E.D. ---");
+    println!("\n{}", "--- Q.E.D. ---".green().bold());
     for def in &fmt.definitions { println!("{}", def); }
     if !fmt.definitions.is_empty() { println!(); }
 
@@ -228,46 +243,52 @@ fn explain_proof(step: &ProofStep) {
 }
 
 fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
-    let indent = "  ".repeat(depth);
-    let goal_text  = fmt.fmt_formula(&step.goal);
-    let rule_label = ProofFormatter::clean_rule_name(&step.rule_name);
+    // Dim the tree branches so they fade into the background
+    let branch = if depth == 0 {
+        String::new()
+    } else {
+        format!("{}└─ ", "   ".repeat(depth - 1)).bright_black().to_string()
+    };
+    
+    // Colorize the components
+    let turnstile = "⊢".magenta().bold();
+    let goal_text = fmt.fmt_formula(&step.goal);
+    let rule_label = ProofFormatter::clean_rule_name(&step.rule_name).yellow();
 
     if !step.witnesses.is_empty() {
-        // Existential Instantiation step.
-        //
-        // Print a "Construct …" line for each witness, then narrate the
-        // sub-proof that established the witness property.
-        println!("{}To prove: {}", indent, goal_text);
+        // Existential Instantiation step
+        println!("{}Prove: {}", branch, goal_text);
         for (var, term) in &step.witnesses {
-            let term_str = fmt.fmt_term(term);
-            // Distinguish between a resolved construction and a bare Skolem
-            // that remained unbound (i.e. proved abstractly).
+            let term_str = fmt.fmt_term(term).green().bold();
             let is_abstract = matches!(term, ast::Term::Var(n, _) if n.starts_with("?w"));
+            let prefix = format!("{}   ", "   ".repeat(depth)).bright_black();
+            
             if is_abstract {
-                println!("{}Witness: introduce {} as an abstract object.", indent, var);
+                println!("{}↳ Let {} be an abstract variable.", prefix, var.bold());
             } else {
-                println!("{}Construct {} as {}.", indent, var, term_str);
+                println!("{}↳ Construct {} := {}", prefix, var.bold(), term_str);
             }
         }
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
 
     } else if step.sub_proofs.is_empty() {
-        // Leaf node
+        // Base case (Axiom or Given)
         if step.rule_name.starts_with("Fact") || step.rule_name == "Given" {
-            println!("{}Given: {}.", indent, goal_text);
+            println!("{}{} {}", branch, goal_text, "(Given)".bright_black());
         } else {
-            println!("{}By {}, {}.", indent, rule_label, goal_text);
+            println!("{}{} (via {})", branch, goal_text, rule_label);
         }
     } else if step.rule_name == "Conjunction" {
-        println!("{}To prove {}, we show both parts:", indent, goal_text);
+        // Conjunctions
+        println!("{}{} {}  {}", branch, turnstile, goal_text, "[Requires both:]".bright_black());
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
     } else {
-        println!("{}Goal: {}.", indent, goal_text);
-        println!("{}Strategy: Apply {}.", indent, rule_label);
+        // Standard implication step
+        println!("{}{} {}  (apply {})", branch, turnstile, goal_text, rule_label);
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
     }
 
-    if depth == 0 { println!("\nTherefore, the proof is complete."); }
+    if depth == 0 { println!("\n{}", "Q.E.D.".green().bold()); }
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +323,18 @@ fn print_help() {
 // CLI command processing
 // ---------------------------------------------------------------------------
 
+fn load_file(filename: &str, target_name: &str, session: &mut Session) -> Result<(), String> {
+    let file = File::open(filename).map_err(|_| format!("Could not open file '{}'.", filename))?;
+    let reader = BufReader::new(file);
+    let previous_active = session.active.clone();
+    session.active = target_name.to_string();
+    for line in reader.lines().flatten() { 
+        process_line(&line, session); 
+    }
+    session.active = previous_active;
+    Ok(())
+}
+
 fn process_line(input: &str, session: &mut Session) {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.starts_with("--") { return; }
@@ -314,11 +347,11 @@ fn process_line(input: &str, session: &mut Session) {
 
     if let Some(rest) = trimmed.strip_prefix("create_universe ") {
         let name = rest.trim();
-        if name.is_empty() { println!("Usage: create_universe <name>"); return; }
+        if name.is_empty() { println!("{}", "Usage: create_universe <name>".red()); return; }
         if session.create_universe(name) {
-            println!("Universe '{}' created.", name);
+            println!("Universe '{}' created.", name.green().bold());
         } else {
-            println!("Universe '{}' already exists.", name);
+            println!("{}", format!("Universe '{}' already exists.", name).yellow());
         }
         return;
     }
@@ -326,9 +359,9 @@ fn process_line(input: &str, session: &mut Session) {
     if let Some(rest) = trimmed.strip_prefix("use ") {
         let name = rest.trim();
         if session.use_universe(name) {
-            println!("Switched to universe '{}'.", name);
+            println!("Switched to universe '{}'.", name.green().bold());
         } else {
-            println!("Error: Universe '{}' does not exist. Use `create_universe {}` first.", name, name);
+            println!("{}", format!("Error: Universe '{}' does not exist.", name).red());
         }
         return;
     }
@@ -379,9 +412,15 @@ fn process_line(input: &str, session: &mut Session) {
 
     if let Some(rest) = trimmed.strip_prefix("import ") {
         let src = rest.trim();
-        match session.import_universe(src) {
-            Ok(n)    => println!("Imported {} new axiom(s) from '{}' into '{}'.", n, src, session.active),
-            Err(msg) => println!("Error: {}", msg),
+        let core_path = format!("lib/core/{}.axia", src);
+        let geom_path = format!("lib/geometry/{}.axia", src);
+        
+        if load_file(&core_path, &session.active.clone(), session).is_ok() {
+            // Success
+        } else if load_file(&geom_path, &session.active.clone(), session).is_ok() {
+            // Success
+        } else {
+            println!("Error: Could not find library '{}' in lib/core/ or lib/geometry/", src);
         }
         return;
     }
@@ -409,21 +448,14 @@ fn process_line(input: &str, session: &mut Session) {
         };
 
         println!("Loading '{}' into universe '{}'…", filename, target_name);
-        match File::open(filename) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
-                let previous_active = session.active.clone();
-                session.active = target_name.clone();
-                for line in reader.lines().flatten() { process_line(&line, session); }
-                session.active = previous_active;
-                println!("Done. '{}' now has {}.", target_name, session.universes[&target_name].summary());
-            }
-            Err(_) => println!("Error: Could not open file '{}'.", filename),
+        match load_file(filename, &target_name, session) {
+            Ok(_) => println!("Done. '{}' now has {}.", target_name, session.universes[&target_name].summary()),
+            Err(e) => println!("Error: {}", e),
         }
         return;
     }
 
-    // -----------------------------------------------------------------------
+    
     // prove <formula>
     // -----------------------------------------------------------------------
 
@@ -432,10 +464,10 @@ fn process_line(input: &str, session: &mut Session) {
         let mut parser = Parser::with_universe(tokens, Some(session.current()));
         match parser.parse_formula() {
             Some(goal) => {
-                println!("Goal: {}  [universe: '{}']", goal, session.active);
+                println!("{} {}  [universe: '{}']", "Goal:".blue().bold(), goal.to_string().cyan(), session.active.yellow());
                 match prove(&goal, session.current(), 10) {
                     Some(proof) => explain_proof(&proof),
-                    None        => println!("No proof found."),
+                    None        => println!("{}", "No proof found.".red().bold()),
                 }
             }
             None => println!("Could not parse goal."),
@@ -473,44 +505,36 @@ fn process_line(input: &str, session: &mut Session) {
     let mut parser = Parser::with_universe(tokens, Some(session.current()));
     match parser.parse_statement() {
         Some(Statement::TypeDecl(n)) => {
-            session.current_mut().add_type(n.clone());
-            println!("Defined Type: {}", n);
+            println!("{} {}", "Defined Type:".yellow(), n.cyan().bold());
         }
         Some(Statement::ConstDecl(n, sort)) => {
-            session.current_mut().add_constant(n.clone(), sort.clone());
-            println!("Defined Constant: {} : {}", n, sort);
+            println!("{} {} : {}", "Defined Constant:".yellow(), n.cyan().bold(), sort.to_string().cyan());
         }
         Some(Statement::PredDecl(n, arg_sorts, ret_sort)) => {
-            let arg_strs: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
-            session.current_mut().add_predicate(n.clone(), arg_strs, ret_sort.to_string());
-            if arg_sorts.is_empty() {
-                println!("Defined Predicate/Relation: {}", n);
-            } else {
-                let sig: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
-                println!("Defined Function/Predicate: {} : {} → {}", n, sig.join(" → "), ret_sort);
-            }
+            let sig: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
+            let sig_str = if sig.is_empty() { "".to_string() } else { format!(" : {} → ", sig.join(" → ")) };
+            println!("{} {}{}{}", "Defined Function/Predicate:".yellow(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
         }
         Some(Statement::AxiomDecl { name, vars, body }) => {
-            let var_strs: Vec<String> = vars
-                .iter()
-                .map(|(v, s)| if s == &Sort::object() { v.clone() } else { format!("{}:{}", v, s) })
-                .collect();
-            let vars_pure: Vec<String> = vars.into_iter().map(|(n, _)| n).collect();
-            add_axiom(name.clone(), vars_pure, body, session.current_mut());
-            if var_strs.is_empty() {
-                println!("Added Axiom: {}", name);
-            } else {
-                println!("Added Axiom: {} [∀ {}]", name, var_strs.join(", "));
-            }
+            let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", v.cyan(), s.to_string().cyan())).collect();
+            let vars_display = if var_strs.is_empty() { "".to_string() } else { format!(" [∀ {}]", var_strs.join(", ")) };
+            add_axiom(name.clone(), vars.iter().map(|(v,_)| v.clone()).collect(), body, session.current_mut());
+            println!("{} {}{}", "Added Axiom:".yellow(), name.yellow().bold(), vars_display.bright_black());
         }
         Some(Statement::Import(src)) => {
-            match session.import_universe(&src) {
-                Ok(n)    => println!("Imported {} new axiom(s) from '{}'.", n, src),
-                Err(msg) => println!("Error: {}", msg),
+            let core_path = format!("lib/core/{}.axia", src);
+            let geom_path = format!("lib/geometry/{}.axia", src);
+            let active = session.active.clone();
+
+            if load_file(&core_path, &active, session).is_ok() {
+                // Success
+            } else if load_file(&geom_path, &active, session).is_ok() {
+                // Success
+            } else {
+                println!("Error: Could not find library '{}' in lib/core/ or lib/geometry/", src);
             }
         }
-        Some(Statement::Goal(_)) => println!("Goal declared."),
-        None => println!("Parse error: {}", trimmed),
+        None => println!("{}", format!("Parse error: {}", trimmed).red()),
     }
 }
 
@@ -522,7 +546,10 @@ fn main() {
     let mut session = Session::new();
     let mut rl = DefaultEditor::new().expect("Failed to init readline");
 
-    println!("--- Axia Kernel v0.8 ---");
+    // Load persistent history from the previous session!
+    let _ = rl.load_history(".axia_history");
+
+    println!("{}", "\n--- Axia Kernel v0.8 ---".yellow().bold());
     println!("Active universe: 'default'  |  type `help` for commands");
 
     loop {
@@ -531,11 +558,21 @@ fn main() {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
                 let t = line.trim();
-                if t == "exit" { break; }
+                if t == "exit" { 
+                    let _ = rl.save_history(".axia_history");
+                    break; 
+                }
                 process_line(&line, &mut session);
             }
-            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => break,
-            Err(e) => { eprintln!("Error: {:?}", e); break; }
+            Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
+                let _ = rl.save_history(".axia_history");
+                break;
+            }
+            Err(e) => { 
+                eprintln!("{}", format!("Error: {:?}", e).red()); 
+                let _ = rl.save_history(".axia_history");
+                break; 
+            }
         }
     }
 }
