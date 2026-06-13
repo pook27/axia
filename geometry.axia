@@ -1,6 +1,0 @@
--- This is our Geometry Library
-Pt : Type
-Line : Type
-On : Pt -> Line -> Prop
-Axiom_Eq : forall a b : Pt, a = b
-Axiom_On : forall a b : Pt, (On a L) and (On b L)

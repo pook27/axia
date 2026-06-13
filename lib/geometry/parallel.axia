@@ -1,7 +1,6 @@
-Pt : Type
-Line : Type
-Parallel : Line -> Line -> Prop
-Intersect : Line -> Line -> Prop
+-- THE PARALLEL POSTULATE
+
+import base
 
 -- Definition: If lines intersect, they are NOT parallel
 Ax_NotPar : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
@@ -9,5 +8,5 @@ Ax_NotPar : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
 -- Definition: If lines are Parallel, they do NOT intersect
 Ax_Par : forall l m : Line, Parallel(l, m) -> not Intersect(l, m)
 
--- Test OR: Lines are either Parallel OR Intersecting
+-- Axiom: Two lines are either Parallel OR they Intersect
 Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)
