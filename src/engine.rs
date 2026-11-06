@@ -343,67 +343,154 @@ impl Formula {
 }
 
 // ---------------------------------------------------------------------------
-// Unification — must cover the Exists arm
+// Rollback-capable substitutions and unification
 // ---------------------------------------------------------------------------
 
-impl Formula {
-    pub fn unify(&self, goal: &Formula) -> Option<Bindings> {
-        let mut bindings = HashMap::new();
-        if self.unify_inner(goal, &mut bindings) { Some(bindings) } else { None }
+/// A substitution environment with an undo trail.
+///
+/// A checkpoint is the current trail length. Any bindings introduced after
+/// that point can be discarded in O(number of changes), without cloning the
+/// complete environment. This is the primitive used by the search engine when
+/// it explores alternatives.
+#[derive(Debug, Clone, Default)]
+pub struct Substitution {
+    bindings: Bindings,
+    trail: Vec<(String, Option<Term>)>,
+}
+
+impl Substitution {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn from_bindings(bindings: Bindings) -> Self {
+        Self { bindings, trail: Vec::new() }
     }
 
-    fn unify_inner(&self, goal: &Formula, bindings: &mut Bindings) -> bool {
-        match (self, goal) {
-            (Formula::Pred(n1, a1), Formula::Pred(n2, a2)) =>
-                n1 == n2
-                && a1.len() == a2.len()
-                && a1.iter().zip(a2).all(|(x, y)| Self::unify_term(x, y, bindings)),
+    pub fn checkpoint(&self) -> usize { self.trail.len() }
 
-                (Formula::Eq(l1, r1), Formula::Eq(l2, r2)) =>
-                    Self::unify_term(l1, l2, bindings) && Self::unify_term(r1, r2, bindings),
-
-                    (Formula::Not(i1),         Formula::Not(i2))         => i1.unify_inner(i2, bindings),
-                    (Formula::Or(l1, r1),      Formula::Or(l2, r2))      =>
-                        l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
-                        (Formula::And(l1, r1),     Formula::And(l2, r2))     =>
-                            l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
-                            (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) =>
-                                l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
-
-                                // Two existentials unify if their bound variables and bodies
-                                // unify (alpha-equivalence is not needed here because we
-                                // normalise variable names at axiom-load time).
-                                (Formula::Exists { var: v1, sort: s1, body: b1 },
-                                 Formula::Exists { var: v2, sort: s2, body: b2 }) =>
-                                    v1 == v2 && s1 == s2 && b1.unify_inner(b2, bindings),
-
-                                _ => false,
+    pub fn rollback(&mut self, checkpoint: usize) {
+        assert!(checkpoint <= self.trail.len(), "invalid substitution checkpoint");
+        while self.trail.len() > checkpoint {
+            let (name, previous) = self.trail.pop().expect("trail length checked");
+            match previous {
+                Some(term) => { self.bindings.insert(name, term); }
+                None => { self.bindings.remove(&name); }
+            }
         }
     }
 
-    pub fn unify_term(t1: &Term, t2: &Term, bindings: &mut Bindings) -> bool {
-        let t1_res = t1.resolve(bindings).clone();
-        let t2_res = t2.resolve(bindings).clone();
+    pub fn bind(&mut self, name: String, term: Term) {
+        let previous = self.bindings.insert(name.clone(), term);
+        self.trail.push((name, previous));
+    }
 
-        match (t1_res, t2_res) {
-            (Term::Var(n1, s1), Term::Var(n2, s2)) => {
-                if n1 == n2 { return true; }
-                if !sorts_compatible(&s1, &s2) { return false; }
-                bindings.insert(n1, Term::Var(n2, s2));
-                true
-            }
-            (Term::Var(n, s), val) | (val, Term::Var(n, s)) => {
-                if occurs_check(&n, &val, bindings) { return false; }
-                if !sorts_compatible(&s, &val.sort()) { return false; }
-                bindings.insert(n, val);
-                true
-            }
-            (Term::Const(a), Term::Const(b)) => a == b,
-            (Term::Apply(n1, a1), Term::Apply(n2, a2)) =>
-                n1 == n2
-                && a1.len() == a2.len()
-                && a1.iter().zip(a2.iter()).all(|(x, y)| Self::unify_term(x, y, bindings)),
-            _ => false,
+    pub fn resolve(&self, term: &Term) -> Term {
+        term.substitute(&self.bindings)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Term> {
+        self.bindings.get(name)
+    }
+
+    pub fn as_bindings(&self) -> &Bindings { &self.bindings }
+
+    pub fn into_bindings(self) -> Bindings { self.bindings }
+
+    /// Unify two terms transactionally. On failure, this call leaves the
+    /// environment exactly as it was before the call.
+    pub fn unify_terms(&mut self, left: &Term, right: &Term) -> bool {
+        let checkpoint = self.checkpoint();
+        if unify_terms_inner(left, right, self) {
+            true
+        } else {
+            self.rollback(checkpoint);
+            false
+        }
+    }
+
+    /// Unify two formulas transactionally. This is the reusable entry point
+    /// for proof search; callers can checkpoint once and roll back an entire
+    /// candidate branch without copying a HashMap.
+    pub fn unify_formulas(&mut self, left: &Formula, right: &Formula) -> bool {
+        let checkpoint = self.checkpoint();
+        if unify_formulas_inner(left, right, self) {
+            true
+        } else {
+            self.rollback(checkpoint);
+            false
+        }
+    }
+}
+
+fn unify_formulas_inner(left: &Formula, right: &Formula, subst: &mut Substitution) -> bool {
+    match (left, right) {
+        (Formula::Pred(n1, a1), Formula::Pred(n2, a2)) =>
+            n1 == n2 && a1.len() == a2.len()
+            && a1.iter().zip(a2).all(|(a, b)| unify_terms_inner(a, b, subst)),
+        (Formula::Eq(l1, r1), Formula::Eq(l2, r2)) =>
+            unify_terms_inner(l1, l2, subst) && unify_terms_inner(r1, r2, subst),
+        (Formula::Not(a), Formula::Not(b)) => unify_formulas_inner(a, b, subst),
+        (Formula::And(l1, r1), Formula::And(l2, r2))
+        | (Formula::Or(l1, r1), Formula::Or(l2, r2))
+        | (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) =>
+            unify_formulas_inner(l1, l2, subst)
+            && unify_formulas_inner(r1, r2, subst),
+        (
+            Formula::Exists { var: v1, sort: s1, body: b1 },
+            Formula::Exists { var: v2, sort: s2, body: b2 },
+        ) => v1 == v2 && s1 == s2 && unify_formulas_inner(b1, b2, subst),
+        _ => false,
+    }
+}
+
+fn unify_terms_inner(left: &Term, right: &Term, subst: &mut Substitution) -> bool {
+    let left = subst.resolve(left);
+    let right = subst.resolve(right);
+
+    match (left, right) {
+        (Term::Var(n1, s1), Term::Var(n2, s2)) => {
+            if n1 == n2 { return true; }
+            if !sorts_compatible(&s1, &s2) { return false; }
+            subst.bind(n1, Term::Var(n2, s2));
+            true
+        }
+        (Term::Var(name, sort), value) | (value, Term::Var(name, sort)) => {
+            if occurs_check(&name, &value, subst.as_bindings()) { return false; }
+            if !sorts_compatible(&sort, &value.sort()) { return false; }
+            subst.bind(name, value);
+            true
+        }
+        (Term::Const(a), Term::Const(b)) => a == b,
+        (Term::Apply(n1, a1), Term::Apply(n2, a2)) =>
+            n1 == n2 && a1.len() == a2.len()
+            && a1.iter().zip(&a2).all(|(a, b)| unify_terms_inner(a, b, subst)),
+        _ => false,
+    }
+}
+
+impl Formula {
+    /// Compatibility API returning an owned binding map.
+    pub fn unify(&self, goal: &Formula) -> Option<Bindings> {
+        let mut subst = Substitution::new();
+        if subst.unify_formulas(self, goal) {
+            Some(subst.into_bindings())
+        } else {
+            None
+        }
+    }
+
+    /// Transactional API for callers that want to reuse one substitution
+    /// environment across several unification attempts.
+    pub fn unify_into(&self, goal: &Formula, subst: &mut Substitution) -> bool {
+        subst.unify_formulas(self, goal)
+    }
+
+    pub fn unify_term(t1: &Term, t2: &Term, bindings: &mut Bindings) -> bool {
+        let mut subst = Substitution::from_bindings(bindings.clone());
+        if subst.unify_terms(t1, t2) {
+            *bindings = subst.into_bindings();
+            true
+        } else {
+            false
         }
     }
 }
@@ -1720,3 +1807,64 @@ mod fact_provenance_tests {
         assert_eq!(universe.all_facts().len(), 2);
     }
 }
+
+#[cfg(test)]
+mod rollback_substitution_tests {
+    use super::*;
+
+    fn var(name: &str) -> Term {
+        Term::Var(name.into(), Sort::object())
+    }
+
+    fn c(name: &str) -> Term { Term::Const(name.into()) }
+
+    #[test]
+    fn failed_formula_unification_rolls_back_partial_bindings() {
+        let pattern = Formula::Pred("Pair".into(), vec![var("x"), c("left")]);
+        let target = Formula::Pred("Pair".into(), vec![c("alice"), c("right")]);
+        let mut subst = Substitution::new();
+
+        assert!(!pattern.unify_into(&target, &mut subst));
+        assert!(subst.get("x").is_none());
+        assert!(subst.as_bindings().is_empty());
+    }
+
+    #[test]
+    fn checkpoint_restores_overwritten_bindings_and_new_bindings() {
+        let mut subst = Substitution::new();
+        subst.bind("x".into(), c("first"));
+        let checkpoint = subst.checkpoint();
+
+        subst.bind("x".into(), c("second"));
+        subst.bind("y".into(), c("third"));
+        subst.rollback(checkpoint);
+
+        assert_eq!(subst.get("x"), Some(&c("first")));
+        assert!(subst.get("y").is_none());
+    }
+
+    #[test]
+    fn successful_unification_can_be_rolled_back_for_next_branch() {
+        let mut subst = Substitution::new();
+        let checkpoint = subst.checkpoint();
+        assert!(subst.unify_terms(&var("x"), &c("alice")));
+        assert_eq!(subst.resolve(&var("x")), c("alice"));
+
+        subst.rollback(checkpoint);
+        assert_eq!(subst.resolve(&var("x")), var("x"));
+    }
+
+    #[test]
+    fn occurs_check_failure_does_not_change_existing_environment() {
+        let mut subst = Substitution::new();
+        subst.bind("known".into(), c("alice"));
+        let before = subst.as_bindings().clone();
+
+        assert!(!subst.unify_terms(
+            &var("x"),
+            &Term::Apply("f".into(), vec![var("x")]),
+        ));
+        assert_eq!(subst.as_bindings(), &before);
+    }
+}
+
