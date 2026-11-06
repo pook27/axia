@@ -1289,3 +1289,12 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Changed `assert` to add an assumption rather than manufacturing a premise-free axiom.
 - Updated `universe_info` and universe summaries to report trusted assumptions and derived facts separately.
 - Forward deduction now reads the combined fact view and writes discoveries only to the derived store.
+
+
+**Rollback-capable substitution core — implementation awaiting validation**
+
+- Introduced a trail-backed `Substitution` environment with checkpoints, rollback, binding resolution and transactional term/formula unification.
+- A failed unification now restores the exact pre-attempt environment, including failures that occur after earlier arguments have already matched.
+- Kept the existing `Formula::unify` and `Bindings` interfaces as compatibility adapters, while adding `unify_into` for callers that reuse a substitution environment.
+- Added regression tests for partial-match rollback, overwritten bindings, branch rollback and occurs-check failure.
+- This is the first migration step, not the completed proof-search optimization: recursive DFS still carries legacy binding snapshots. The next step is to move its branch exploration onto this shared trail and remove those repeated map clones.
