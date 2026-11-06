@@ -1358,3 +1358,12 @@ This section records the implementation that now exists, rather than the longer-
 4. Continue with the named-universe dependency graph after theorem provenance and verification are reliable.
 
 The existing search engine remains a proof-discovery component. It is not part of the trusted kernel, and passing the current tests does not yet establish that Axia has a complete formal proof assistant kernel.
+
+
+## Typed proof-rule migration — in progress
+
+- Introduced a `ProofRule` enum for equality reflexivity, named givens, named axioms, conjunction/disjunction introduction, and existential introduction.
+- Migrated proof search to construct these variants directly rather than encoding rule identity in strings.
+- Migrated the kernel checker to match on typed constructors, so unsupported rule kinds are rejected by exhaustive enum handling rather than string parsing.
+- Kept human-readable labels at the presentation boundary for the REPL formatter.
+- This is the first typed-proof-object step, not the final proof-object design: substitutions and axiom instantiations are still implicit and must become explicit kernel-checked data.

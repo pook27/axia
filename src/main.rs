@@ -280,7 +280,7 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
     // Colorize the components
     let turnstile = "⊢".magenta().bold();
     let goal_text = fmt.fmt_formula(&step.goal);
-    let rule_label = ProofFormatter::clean_rule_name(&step.rule_name).yellow();
+    let rule_label = ProofFormatter::clean_rule_name(step.rule.label()).yellow();
 
     if !step.witnesses.is_empty() {
         // Existential Instantiation step
@@ -300,20 +300,20 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
 
     } else if step.sub_proofs.is_empty() {
         // Base case — no sub-proofs: axiom/given/deduction leaf.
-        if step.rule_name.starts_with("Given ") {
+        if let engine::ProofRule::Given(hyp) = &step.rule {
             // Named hypothesis or deduction used as a direct fact.
-            let hyp = step.rule_name.strip_prefix("Given ").unwrap_or(&step.rule_name);
+            let hyp = hyp.as_str();
             println!("{}{} {} {}",
                 branch,
                 goal_text,
                 "(by hypothesis".bright_black(),
                 format!("{})", hyp).bright_black());
-        } else if step.rule_name.starts_with("Fact") {
+        } else if matches!(&step.rule, engine::ProofRule::Axiom(_)) && step.rule.label().starts_with("Fact") {
             println!("{}{} {}", branch, goal_text, "(asserted fact)".bright_black());
         } else {
             println!("{}{} (via {})", branch, goal_text, rule_label);
         }
-    } else if step.rule_name == "Conjunction" {
+    } else if step.rule == engine::ProofRule::ConjunctionIntroduction {
         // Conjunctions
         println!("{}{} {}  {}", branch, turnstile, goal_text, "[Requires both:]".bright_black());
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }

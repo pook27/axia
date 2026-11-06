@@ -6,7 +6,7 @@
 //! until it passes this checker.
 
 use crate::ast::Formula;
-use crate::engine::{ProofStep, Universe};
+use crate::engine::{ProofRule, ProofStep, Universe};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,7 @@ fn check_node(
 ) -> Result<(), KernelError> {
     let fail = |message: String, path: &[usize]| KernelError::at(path, message);
 
-    if proof.rule_name == "Eq_Refl" {
+    if proof.rule == ProofRule::EqualityReflexivity {
         match &proof.goal {
             Formula::Eq(left, right) if left == right && proof.sub_proofs.is_empty()
                 && proof.witnesses.is_empty() => return Ok(()),
@@ -77,7 +77,7 @@ fn check_node(
         }
     }
 
-    if let Some(name) = proof.rule_name.strip_prefix("Given ") {
+    if let ProofRule::Given(name) = &proof.rule {
         let facts = universe.all_facts();
         let Some(fact) = facts.get(name) else {
             return Err(fail(format!("unknown assumption or derived fact '{}'", name), path));
@@ -90,8 +90,8 @@ fn check_node(
         return Ok(());
     }
 
-    match proof.rule_name.as_str() {
-        "Conjunction" => {
+    match &proof.rule {
+        ProofRule::ConjunctionIntroduction => {
             let Formula::And(left, right) = &proof.goal else {
                 return Err(fail("conjunction rule used for a non-conjunction goal".into(), path));
             };
@@ -102,18 +102,18 @@ fn check_node(
                 return Err(fail("conjunction requires proofs of both conjuncts".into(), path));
             }
         }
-        "Disjunction_Left" | "Disjunction_Right" => {
+        ProofRule::DisjunctionIntroductionLeft | ProofRule::DisjunctionIntroductionRight => {
             let Formula::Or(left, right) = &proof.goal else {
                 return Err(fail("disjunction rule used for a non-disjunction goal".into(), path));
             };
-            let expected = if proof.rule_name == "Disjunction_Left" { &**left } else { &**right };
+            let expected = if proof.rule == ProofRule::DisjunctionIntroductionLeft { &**left } else { &**right };
             if proof.sub_proofs.len() != 1 || !proof.witnesses.is_empty()
                 || proof.sub_proofs[0].goal != *expected
             {
                 return Err(fail("disjunction proof must establish the selected branch".into(), path));
             }
         }
-        "Existential_Instantiation" => {
+        ProofRule::ExistentialIntroduction => {
             let Formula::Exists { var, body, .. } = &proof.goal else {
                 return Err(fail("existential rule used for a non-existential goal".into(), path));
             };
@@ -128,9 +128,9 @@ fn check_node(
                 return Err(fail("existential sub-proof does not match the supplied witness".into(), path));
             }
         }
-        rule_name => {
-            let Some(axiom) = universe.axioms.iter().find(|axiom| axiom.name == rule_name) else {
-                return Err(fail(format!("unsupported or unknown proof rule '{}'", rule_name), path));
+        ProofRule::Axiom(axiom_name) => {
+            let Some(axiom) = universe.axioms.iter().find(|axiom| axiom.name == *axiom_name) else {
+                return Err(fail(format!("unknown axiom proof rule '{}'", axiom_name), path));
             };
             if !proof.witnesses.is_empty() {
                 return Err(fail("axiom application cannot introduce existential witnesses".into(), path));
@@ -169,14 +169,14 @@ fn check_node(
 mod tests {
     use super::*;
     use crate::ast::Term;
-    use crate::engine::{Axiom, ProofStep};
+    use crate::engine::{Axiom, ProofRule, ProofStep};
 
     fn pred(name: &str) -> Formula {
         Formula::Pred(name.into(), vec![])
     }
 
     fn leaf(goal: Formula, rule: &str) -> ProofStep {
-        ProofStep { goal, rule_name: rule.into(), sub_proofs: vec![], witnesses: vec![] }
+        ProofStep { goal, rule: match rule { "Eq_Refl" => ProofRule::EqualityReflexivity, other => ProofRule::Axiom(other.into()) }, sub_proofs: vec![], witnesses: vec![] }
     }
 
 
@@ -208,7 +208,7 @@ mod tests {
         let mut universe = Universe::new();
         let proof = ProofStep {
             goal: Formula::And(Box::new(pred("P")), Box::new(pred("Q"))),
-            rule_name: "Conjunction".into(),
+            rule: ProofRule::ConjunctionIntroduction,
             sub_proofs: vec![leaf(pred("P"), "Given p"), leaf(pred("Q"), "Given q")],
             witnesses: vec![],
         };
@@ -232,7 +232,7 @@ mod tests {
         universe.add_given("p".into(), pred("P"));
         let proof = ProofStep {
             goal: pred("Q"),
-            rule_name: "P_to_Q".into(),
+            rule: ProofRule::Axiom("P_to_Q".into()),
             sub_proofs: vec![leaf(pred("P"), "Given p")],
             witnesses: vec![],
         };
