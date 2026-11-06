@@ -103,6 +103,54 @@ impl Universe {
     pub fn add_constant(&mut self, name: String, sort: Sort) {
         self.constants.insert(name, sort);
     }
+    pub fn infer_term_sort(&self, term: &Term) -> Result<Option<Sort>, String> {
+        match term {
+            Term::Var(_, sort) => {
+                if sort == &Sort::object() {
+                    Ok(None)
+                } else {
+                    Ok(Some(sort.clone()))
+                }
+            }
+
+            Term::Const(name) => {
+                Ok(self.constants.get(name).cloned())
+            }
+
+            Term::Apply(name, args) => {
+                let Some((expected_sorts, return_sort)) = self.predicates.get(name) else {
+                    return Ok(None);
+                };
+
+                if args.len() != expected_sorts.len() {
+                    return Err(format!(
+                            "{} expects {} argument(s), but received {}",
+                            name,
+                            expected_sorts.len(),
+                            args.len()
+                    ));
+                }
+
+                for (index, (arg, expected)) in
+                    args.iter().zip(expected_sorts).enumerate()
+                {
+                    if let Some(actual) = self.infer_term_sort(arg)? {
+                        if actual.0 != *expected {
+                            return Err(format!(
+                                    "argument {} of {} expects {}, but received {}",
+                                    index + 1,
+                                    name,
+                                    expected,
+                                    actual
+                            ));
+                        }
+                    }
+                }
+
+                Ok(Some(Sort(return_sort.clone())))
+            }
+        }
+    }
 
     pub fn add_given(&mut self, name: String, formula: Formula) {
         self.givens.insert(name, formula);
@@ -179,26 +227,26 @@ impl Formula {
             ),
             Formula::And(l, r)       => Formula::And(
                 Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
-            Formula::Or(l, r)        => Formula::Or(
-                Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
-            Formula::Not(i)          => Formula::Not(Box::new(i.substitute(bindings))),
-            Formula::Implies(l, r)   => Formula::Implies(
-                Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
+                Formula::Or(l, r)        => Formula::Or(
+                    Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
+                Formula::Not(i)          => Formula::Not(Box::new(i.substitute(bindings))),
+                Formula::Implies(l, r)   => Formula::Implies(
+                    Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
 
-            // Substitution respects the binder: if the bound variable is
-            // shadowed by a binding we skip it inside the body, just as in
-            // capture-avoiding substitution.  In practice our Skolem names
-            // (`?wN`) are globally unique so shadowing cannot occur, but we
-            // implement it correctly anyway.
-            Formula::Exists { var, sort, body } => {
-                let mut inner_bindings = bindings.clone();
-                inner_bindings.remove(var); // the bound var is local
-                Formula::Exists {
-                    var:  var.clone(),
-                    sort: sort.clone(),
-                    body: Box::new(body.substitute(&inner_bindings)),
-                }
-            }
+                    // Substitution respects the binder: if the bound variable is
+                    // shadowed by a binding we skip it inside the body, just as in
+                    // capture-avoiding substitution.  In practice our Skolem names
+                    // (`?wN`) are globally unique so shadowing cannot occur, but we
+                    // implement it correctly anyway.
+                    Formula::Exists { var, sort, body } => {
+                        let mut inner_bindings = bindings.clone();
+                        inner_bindings.remove(var); // the bound var is local
+                        Formula::Exists {
+                            var:  var.clone(),
+                            sort: sort.clone(),
+                            body: Box::new(body.substitute(&inner_bindings)),
+                        }
+                    }
         }
     }
 }
@@ -217,28 +265,28 @@ impl Formula {
         match (self, goal) {
             (Formula::Pred(n1, a1), Formula::Pred(n2, a2)) =>
                 n1 == n2
-                    && a1.len() == a2.len()
-                    && a1.iter().zip(a2).all(|(x, y)| Self::unify_term(x, y, bindings)),
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2).all(|(x, y)| Self::unify_term(x, y, bindings)),
 
-            (Formula::Eq(l1, r1), Formula::Eq(l2, r2)) =>
-                Self::unify_term(l1, l2, bindings) && Self::unify_term(r1, r2, bindings),
+                (Formula::Eq(l1, r1), Formula::Eq(l2, r2)) =>
+                    Self::unify_term(l1, l2, bindings) && Self::unify_term(r1, r2, bindings),
 
-            (Formula::Not(i1),         Formula::Not(i2))         => i1.unify_inner(i2, bindings),
-            (Formula::Or(l1, r1),      Formula::Or(l2, r2))      =>
-                l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
-            (Formula::And(l1, r1),     Formula::And(l2, r2))     =>
-                l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
-            (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) =>
-                l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
+                    (Formula::Not(i1),         Formula::Not(i2))         => i1.unify_inner(i2, bindings),
+                    (Formula::Or(l1, r1),      Formula::Or(l2, r2))      =>
+                        l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
+                        (Formula::And(l1, r1),     Formula::And(l2, r2))     =>
+                            l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
+                            (Formula::Implies(l1, r1), Formula::Implies(l2, r2)) =>
+                                l1.unify_inner(l2, bindings) && r1.unify_inner(r2, bindings),
 
-            // Two existentials unify if their bound variables and bodies
-            // unify (alpha-equivalence is not needed here because we
-            // normalise variable names at axiom-load time).
-            (Formula::Exists { var: v1, sort: s1, body: b1 },
-             Formula::Exists { var: v2, sort: s2, body: b2 }) =>
-                v1 == v2 && s1 == s2 && b1.unify_inner(b2, bindings),
+                                // Two existentials unify if their bound variables and bodies
+                                // unify (alpha-equivalence is not needed here because we
+                                // normalise variable names at axiom-load time).
+                                (Formula::Exists { var: v1, sort: s1, body: b1 },
+                                 Formula::Exists { var: v2, sort: s2, body: b2 }) =>
+                                    v1 == v2 && s1 == s2 && b1.unify_inner(b2, bindings),
 
-            _ => false,
+                                _ => false,
         }
     }
 
@@ -262,8 +310,8 @@ impl Formula {
             (Term::Const(a), Term::Const(b)) => a == b,
             (Term::Apply(n1, a1), Term::Apply(n2, a2)) =>
                 n1 == n2
-                    && a1.len() == a2.len()
-                    && a1.iter().zip(a2.iter()).all(|(x, y)| Self::unify_term(x, y, bindings)),
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2.iter()).all(|(x, y)| Self::unify_term(x, y, bindings)),
             _ => false,
         }
     }
@@ -377,7 +425,7 @@ pub fn simplify_term(term: &Term, axioms: &[Axiom]) -> Term {
             let mut bindings = Bindings::new();
             if pattern_match(lhs, &current_term, &mut bindings) {
                 let rewritten = rhs.substitute(&bindings);
-                
+
                 // ---> THE FIX: PREVENT INFINITE REWRITE LOOPS <---
                 // If the rewrite rule doesn't actually change the term 
                 // (like Eq_Refl mapping `x` to `x`), ignore it!
@@ -446,25 +494,25 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
         match f {
             Formula::Eq(l, r) =>
                 Formula::Eq(rename_term(l, rename), rename_term(r, rename)),
-            Formula::Pred(n, args) =>
-                Formula::Pred(n.clone(), args.iter().map(|a| rename_term(a, rename)).collect()),
-            Formula::And(l, r) =>
-                Formula::And(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
-            Formula::Or(l, r) =>
-                Formula::Or(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
-            Formula::Not(i) =>
-                Formula::Not(Box::new(rename_formula(i, rename))),
-            Formula::Implies(l, r) =>
-                Formula::Implies(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
-            Formula::Exists { var, sort, body } => {
-                // If the existential variable shadows a universally-quantified
-                // one, propagate the rename into the body but not the binder.
-                Formula::Exists {
-                    var:  rename.get(var).cloned().unwrap_or_else(|| var.clone()),
-                    sort: sort.clone(),
-                    body: Box::new(rename_formula(body, rename)),
-                }
-            }
+                Formula::Pred(n, args) =>
+                    Formula::Pred(n.clone(), args.iter().map(|a| rename_term(a, rename)).collect()),
+                    Formula::And(l, r) =>
+                        Formula::And(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
+                        Formula::Or(l, r) =>
+                            Formula::Or(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
+                        Formula::Not(i) =>
+                            Formula::Not(Box::new(rename_formula(i, rename))),
+                            Formula::Implies(l, r) =>
+                                Formula::Implies(Box::new(rename_formula(l, rename)), Box::new(rename_formula(r, rename))),
+                                Formula::Exists { var, sort, body } => {
+                                    // If the existential variable shadows a universally-quantified
+                                    // one, propagate the rename into the body but not the binder.
+                                    Formula::Exists {
+                                        var:  rename.get(var).cloned().unwrap_or_else(|| var.clone()),
+                                        sort: sort.clone(),
+                                        body: Box::new(rename_formula(body, rename)),
+                                    }
+                                }
         }
     }
 
@@ -730,9 +778,9 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     for (given_name, given_formula) in &universe.givens {
         if let Some(_bindings) = given_formula.unify(goal) {
             return Some(ProofStep::simple(
-                goal.clone(),
-                format!("Given {}", given_name),
-                vec![],
+                    goal.clone(),
+                    format!("Given {}", given_name),
+                    vec![],
             ));
         }
     }
@@ -860,7 +908,7 @@ fn prove_dfs(
     // a different branch.
     // ------------------------------------------------------------------
     if path.contains(&current_goal) { return vec![]; }
-    
+
     let mut results = Vec::new();
 
     // ------------------------------------------------------------------
@@ -872,8 +920,8 @@ fn prove_dfs(
             let right_sub = right.substitute(&b1);
             for (p2, b2) in prove_dfs(&right_sub, axioms, givens, depth, &b1, &path2, skolem_ctr, axiom_ctr, operations_budget) {
                 results.push((
-                    ProofStep::simple(current_goal.clone(), "Conjunction", vec![p1.clone(), p2]),
-                    b2,
+                        ProofStep::simple(current_goal.clone(), "Conjunction", vec![p1.clone(), p2]),
+                        b2,
                 ));
                 if results.len() >= 3 { return results; } // <-- CAP
             }
@@ -971,14 +1019,14 @@ fn prove_dfs(
                 for (sub_proofs_so_far, current_bindings) in branch_states {
                     let p_sub = premise.substitute(&current_bindings);
                     let premise_proofs = prove_dfs(&p_sub, axioms, givens, depth - 1, &current_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget);
-                    
+
                     for (proof, b_out) in premise_proofs {
                         let mut next_proofs = sub_proofs_so_far.clone();
                         next_proofs.push(proof);
-                        
+
                         let mut next_bindings = current_bindings.clone();
                         next_bindings.extend(b_out);
-                        
+
                         next_states.push((next_proofs, next_bindings));
                         if next_states.len() >= 5 { break; } // <-- CAP
                     }
@@ -989,8 +1037,8 @@ fn prove_dfs(
             // Any state that survived all premises is a valid proof
             for (sub_proofs, final_bindings) in branch_states {
                 results.push((
-                    ProofStep::simple(current_goal.clone(), axiom.name.clone(), sub_proofs),
-                    final_bindings,
+                        ProofStep::simple(current_goal.clone(), axiom.name.clone(), sub_proofs),
+                        final_bindings,
                 ));
                 if results.len() >= 3 { return results; } // <-- CAP
             }
@@ -1000,4 +1048,84 @@ fn prove_dfs(
     }
 
     results
+}
+
+#[cfg(test)]
+mod sort_inference_tests {
+    use super::*;
+    use crate::ast::Sort;
+
+    #[test]
+    fn infers_constant_sort() {
+        let mut universe = Universe::new();
+        universe.add_constant("alice".into(), Sort("Person".into()));
+
+        assert_eq!(
+            universe.infer_term_sort(&Term::Const("alice".into())),
+            Ok(Some(Sort("Person".into())))
+        );
+    }
+
+    #[test]
+    fn infers_function_return_sort() {
+        let mut universe = Universe::new();
+        universe.add_predicate(
+            "FatherOf".into(),
+            vec!["Person".into()],
+            "Person".into(),
+        );
+        universe.add_constant("alice".into(), Sort("Person".into()));
+
+        let term = Term::Apply(
+            "FatherOf".into(),
+            vec![Term::Const("alice".into())],
+        );
+
+        assert_eq!(
+            universe.infer_term_sort(&term),
+            Ok(Some(Sort("Person".into())))
+        );
+    }
+
+    #[test]
+    fn rejects_function_argument_sort_mismatch() {
+        let mut universe = Universe::new();
+        universe.add_predicate(
+            "FatherOf".into(),
+            vec!["Person".into()],
+            "Person".into(),
+        );
+        universe.add_constant("red".into(), Sort("Color".into()));
+
+        let term = Term::Apply(
+            "FatherOf".into(),
+            vec![Term::Const("red".into())],
+        );
+
+        assert!(universe.infer_term_sort(&term).is_err());
+    }
+
+    #[test]
+    fn rejects_function_arity_mismatch() {
+        let mut universe = Universe::new();
+        universe.add_predicate(
+            "FatherOf".into(),
+            vec!["Person".into()],
+            "Person".into(),
+        );
+
+        let term = Term::Apply("FatherOf".into(), vec![]);
+
+        assert!(universe.infer_term_sort(&term).is_err());
+    }
+
+    #[test]
+    fn leaves_unannotated_variable_sort_unknown() {
+        let universe = Universe::new();
+
+        assert_eq!(
+            universe.infer_term_sort(&Term::Var("x".into(), Sort::object())),
+            Ok(None)
+        );
+    }
 }
