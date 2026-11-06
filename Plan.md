@@ -1328,12 +1328,12 @@ This section records the implementation that now exists, rather than the longer-
 - Added `src/kernel.rs`, which checks candidate proof trees without invoking proof search.
 - The checker explicitly validates the currently supported proof steps: equality reflexivity, named assumptions/derived facts, conjunction introduction, disjunction introduction, existential witness instantiation, and named axiom applications.
 - It checks that axiom applications establish their conclusion and provide a proof for every premise.
-- Unknown rule names and malformed proof trees are rejected with a structured error containing the failing child path.
+- Malformed proof trees and references to unknown axioms/facts are rejected with a structured error containing the failing child path.
 - Integrated kernel checking into `prove_checked`; a search result is no longer returned as a checked proof until the checker accepts it.
 - Added positive and adversarial unit tests for assumptions, conjunctions, axiom premises, unknown rules and malformed reflexivity.
 - The maintainer reported that the full test suite passed after the initial checker integration.
 
-**Original-goal binding check — in progress**
+**Original-goal binding check — implemented (initial guard)**
 
 - The checked entry point must verify that the root of the candidate proof still establishes the exact proposition requested by the caller.
 - This is necessary because the search engine currently simplifies equality terms before constructing a reflexivity proof. Checking only the simplified proof tree could otherwise accept a proof of a different equality.
@@ -1343,7 +1343,7 @@ This section records the implementation that now exists, rather than the longer-
 
 **Still required for a genuinely small trusted kernel**
 
-- Replace string-valued rule names with typed proof constructors.
+- Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
 - Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
 - Strengthen existential witness checking, including sort correctness and capture avoidance.
 - Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
@@ -1364,6 +1364,6 @@ The existing search engine remains a proof-discovery component. It is not part o
 
 - Introduced a `ProofRule` enum for equality reflexivity, named givens, named axioms, conjunction/disjunction introduction, and existential introduction.
 - Migrated proof search to construct these variants directly rather than encoding rule identity in strings.
-- Migrated the kernel checker to match on typed constructors, so unsupported rule kinds are rejected by exhaustive enum handling rather than string parsing.
+- Migrated the kernel checker to match on typed constructors. Every `ProofRule` variant is handled explicitly; the checker no longer parses display strings.
 - Kept human-readable labels at the presentation boundary for the REPL formatter.
 - This is the first typed-proof-object step, not the final proof-object design: substitutions and axiom instantiations are still implicit and must become explicit kernel-checked data.
