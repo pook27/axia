@@ -321,6 +321,59 @@ mod tests {
         assert!(check_proof(&forged, &universe).is_err());
     }
 
+
+    #[test]
+    fn checks_explicit_axiom_instantiations_against_conclusion_and_premises() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), crate::ast::Sort::object());
+        let alice = Term::Const("alice".into());
+        let p_x = Formula::Pred("P".into(), vec![x.clone()]);
+        let q_x = Formula::Pred("Q".into(), vec![x]);
+        universe.add_axiom(Axiom {
+            name: "P_to_Q".into(),
+            vars: vec!["x".into()],
+            premises: vec![p_x],
+            conclusion: q_x.clone(),
+        });
+
+        let instantiation = HashMap::from([("x".into(), alice.clone())]);
+        let proof = ProofStep {
+            goal: Formula::Pred("Q".into(), vec![alice.clone()]),
+            rule: ProofRule::Axiom("P_to_Q".into(), instantiation.clone()),
+            sub_proofs: vec![leaf(
+                Formula::Pred("P".into(), vec![alice.clone()]),
+                ProofRule::Given("p_alice".into()),
+            )],
+            witnesses: vec![],
+        };
+        universe.add_given(
+            "p_alice".into(),
+            Formula::Pred("P".into(), vec![alice.clone()]),
+        );
+        check_proof(&proof, &universe).unwrap();
+
+        let undeclared = ProofStep {
+            rule: ProofRule::Axiom(
+                "P_to_Q".into(),
+                HashMap::from([
+                    ("x".into(), alice.clone()),
+                    ("rogue".into(), alice.clone()),
+                ]),
+            ),
+            ..proof.clone()
+        };
+        assert!(check_proof(&undeclared, &universe).is_err());
+
+        let wrong_premise = ProofStep {
+            sub_proofs: vec![leaf(
+                Formula::Pred("P".into(), vec![Term::Const("bob".into())]),
+                ProofRule::Given("p_alice".into()),
+            )],
+            ..proof
+        };
+        assert!(check_proof(&wrong_premise, &universe).is_err());
+    }
+
     #[test]
     fn rejects_unknown_axioms_and_false_reflexivity() {
         let universe = Universe::new();
