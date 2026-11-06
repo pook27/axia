@@ -1274,15 +1274,17 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - The project maintainer ran the test suite successfully.
 
 
-**Criterion benchmark suite — implementation awaiting validation**
+**Criterion benchmark suite — done**
 
 - Added `benches/engine.rs` with separate proof-search and forward-deduction benchmarks at chain sizes 8, 32 and 128.
 - Each workload includes unrelated facts and rules to exercise formula-head indexing rather than measuring only a trivial linear chain.
 - Workload construction is outside the timed routine via Criterion's batched iteration.
-- Run with `cargo bench --bench engine`; compare results across sizes before drawing performance conclusions.
+- Validated with `cargo test` and `cargo bench --bench engine`.
+- Latest proof-search benchmark changes after trail migration: 8 = 9.1% faster, 32 = 29.4% faster, 128 = 35.0% faster.
+- Forward deduction: 8 = 4.6% slower, 32 = 10.7% faster, 128 = no statistically significant change.
 
 
-**Trusted assumptions vs. derived facts — implementation awaiting validation**
+**Trusted assumptions vs. derived facts — done**
 
 - Split the universe fact store into `assumptions` (explicitly supplied by the user) and `derived` (facts produced by forward deduction).
 - Added `Universe::all_facts()` as the combined read-only reasoning view, preserving existing proof-search and deduction behavior while retaining provenance in storage.
@@ -1291,7 +1293,7 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Forward deduction now reads the combined fact view and writes discoveries only to the derived store.
 
 
-**Rollback-capable substitution core — implementation awaiting validation**
+**Rollback-capable substitution core — done**
 
 - Introduced a trail-backed `Substitution` environment with checkpoints, rollback, binding resolution and transactional term/formula unification.
 - A failed unification now restores the exact pre-attempt environment, including failures that occur after earlier arguments have already matched.
@@ -1300,7 +1302,7 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - This is the first migration step, not the completed proof-search optimization: recursive DFS still carries legacy binding snapshots. The next step is to move its branch exploration onto this shared trail and remove those repeated map clones.
 
 
-**Trail-backed backward proof search — implementation awaiting validation**
+**Trail-backed backward proof search — done**
 
 - Replaced branch-local binding-map snapshots in backward DFS with one mutable `Substitution` and checkpoint/rollback.
 - Added continuation-based search: a successful earlier premise remains active while later premises are explored, so failure backtracks directly into the earlier candidate.
@@ -1308,4 +1310,5 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Sorted indexed given names to make candidate exploration reproducible.
 - Added regression tests for conjunction backtracking, shared bindings across multiple premises, existential witness preservation and disjunction fallback.
 - The successful top-level result takes one final binding snapshot; intermediate branches no longer clone and merge complete substitution maps.
-- Awaiting maintainer validation with `cargo test` and `cargo bench --bench engine`.
+- Validated by the maintainer: all 30 library tests, 30 binary tests, 11 logical-operator integration tests and 8 malformed-input tests passed.
+- Criterion showed proof-search improvements of 9.1%, 29.4% and 35.0% at chain sizes 8, 32 and 128 respectively.
