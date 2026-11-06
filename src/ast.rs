@@ -14,7 +14,7 @@ impl fmt::Display for Sort {
 }
 
 /// A term in the object language.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     /// A logic variable (unknown), carrying its declared sort.
     Var(String, Sort),
@@ -25,7 +25,7 @@ pub enum Term {
 }
 
 /// A first-order formula, now including existential quantification.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Formula {
     Eq(Term, Term),
     Pred(String, Vec<Term>),
