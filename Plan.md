@@ -1190,8 +1190,8 @@ These are the first changes I would actually make:
 
 |**Sprint 1**|Recommended starting point|
 |---|---|
-|4 / 9 completed|44%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
+|5 / 9 completed|56%|
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
 
 
 
@@ -1264,3 +1264,11 @@ This is an architectural review of the source, not a completed runtime audit: I 
 
 The next useful step would be turning this roadmap into a concrete, dependency-ordered implementation specification, including Rust structures, module interfaces and acceptance tests for every phase. 
 
+
+
+**Axiom/fact indexing — done**
+
+- Indexed backward proof-search axioms by conclusion head and givens by formula head.
+- Indexed forward rules by their first premise head and facts by formula head.
+- Added regression tests proving that irrelevant formula constructors, predicate names and arities are filtered without changing unification bindings.
+- The project maintainer ran the test suite successfully.

@@ -657,42 +657,67 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
 /// unification step here is effectively one-way pattern matching: the
 /// premise's variables get bound to concrete terms from the given, while
 /// the given itself is never modified.
-fn match_premises_forward(
+/// Match every premise, forcing one selected premise to use a fact from the
+/// current delta. All other premises may use any known fact. This is the
+/// semi-naive step: every produced binding is therefore anchored to at least
+/// one fact that was not present in the previous iteration.
+fn match_premises_forward_delta(
     premises: &[Formula],
-    givens:   &HashMap<String, Formula>,
+    givens: &HashMap<String, Formula>,
     fact_index: &FactIndex,
+    pivot_index: usize,
+    delta_fact: &Formula,
     bindings: &Bindings,
 ) -> Vec<Bindings> {
-    // Base case: all premises satisfied — the current binding set is valid.
-    if premises.is_empty() {
-        return vec![bindings.clone()];
-    }
-
-    let premise = &premises[0];
-    let rest    = &premises[1..];
-
-    // Substitute variables that are already known into this premise so
-    // that the unification attempt sees the most-specific form.
-    let premise_sub = premise.substitute(bindings);
-
-    let mut results = Vec::new();
-
-    for given_name in fact_index.candidates(&premise_sub) {
-        let Some(given_formula) = givens.get(given_name) else { continue; };
-        // Try to unify the (partially-substituted) premise with this given.
-        // `unify` treats *both* sides as potentially containing variables,
-        // which is correct here: the premise may still have free axiom
-        // variables that need to be bound to ground terms from the given.
-        if let Some(new_bindings) = premise_sub.unify(given_formula) {
-            // Merge the newly discovered bindings with the ones we already
-            // have, then recurse on the remaining premises.
-            let mut merged = bindings.clone();
-            merged.extend(new_bindings);
-            results.extend(match_premises_forward(rest, givens, fact_index, &merged));
+    fn recurse(
+        premises: &[Formula],
+        givens: &HashMap<String, Formula>,
+        fact_index: &FactIndex,
+        pivot_index: usize,
+        delta_fact: &Formula,
+        position: usize,
+        bindings: &Bindings,
+    ) -> Vec<Bindings> {
+        if position == premises.len() {
+            return vec![bindings.clone()];
         }
+
+        let premise = premises[position].substitute(bindings);
+        let mut results = Vec::new();
+
+        if position == pivot_index {
+            if let Some(new_bindings) = premise.unify(delta_fact) {
+                let mut merged = bindings.clone();
+                merged.extend(new_bindings);
+                results.extend(recurse(
+                    premises, givens, fact_index, pivot_index, delta_fact,
+                    position + 1, &merged,
+                ));
+            }
+        } else {
+            for given_name in fact_index.candidates(&premise) {
+                let Some(given_formula) = givens.get(given_name) else { continue; };
+                if let Some(new_bindings) = premise.unify(given_formula) {
+                    let mut merged = bindings.clone();
+                    merged.extend(new_bindings);
+                    results.extend(recurse(
+                        premises, givens, fact_index, pivot_index, delta_fact,
+                        position + 1, &merged,
+                    ));
+                }
+            }
+        }
+
+        results
     }
 
-    results
+    if pivot_index >= premises.len() {
+        return Vec::new();
+    }
+
+    recurse(
+        premises, givens, fact_index, pivot_index, delta_fact, 0, bindings,
+    )
 }
 
 /// Simplify a formula exactly as `prove` does before handing off to DFS:
@@ -710,117 +735,112 @@ fn simp_formula(f: Formula, axioms: &[Axiom]) -> Formula {
     }
 }
 
-/// Apply all axioms forward against the universe's `givens` for up to
-/// `max_steps` saturation rounds.
+/// Derive facts using semi-naive forward chaining.
 ///
-/// Each step:
-/// 1. Iterates over every axiom (alpha-renamed to avoid variable clashes).
-/// 2. Calls `match_premises_forward` to find all ground binding maps that
-///    satisfy the axiom's premises using existing givens.
-/// 3. For every valid binding, instantiates the conclusion and simplifies
-///    it through the `simp` rewrite pass.
-/// 4. Checks whether the simplified conclusion is already present in the
-///    givens (by structural equality of formula values).
-/// 5. If it is genuinely new, inserts it as `Deduction_N` and records it.
-///
-/// The loop terminates early if a full step produces no new facts
-/// (fixpoint reached).  Returns the list of all newly discovered facts
-/// as `(name, formula)` pairs in discovery order.
+/// The initial delta is the current fact database. Each subsequent iteration
+/// contains only facts discovered in the preceding iteration. A rule is
+/// reconsidered only when at least one of its premises can match a delta fact;
+/// the remaining premises are matched against the complete known database.
 pub fn forward_deduce(
     universe: &mut Universe,
     max_steps: u32,
 ) -> Vec<(String, Formula)> {
-    // Global deduction counter — survives across saturation steps so names
-    // like `Deduction_3` are unique for the lifetime of the call.
-    let mut deduction_counter: usize = 0;
-    // Accumulate all discoveries to return to the caller.
-    let mut all_new: Vec<(String, Formula)> = Vec::new();
+    use std::collections::HashSet;
 
-    // A counter for alpha-renaming axioms. Reused across steps and axioms
-    // so every instantiation gets a globally unique variable suffix.
-    let mut axiom_ctr: usize = 0;
+    let axioms = universe.axioms.clone();
+    let rule_index = ForwardAxiomIndex::new(&axioms);
+    let mut known: HashSet<Formula> = universe.givens.values().cloned().collect();
+    let mut delta = universe.givens.clone();
+    let mut all_new = Vec::new();
+    let mut deduction_counter = 0usize;
+    let mut axiom_counter = 0usize;
 
-    // Axiom conclusions/premises are immutable during saturation, so their
-    // index is built once. The fact index is rebuilt each round as discoveries
-    // extend the database.
-    let axioms_snap = universe.axioms.clone();
-    let forward_index = ForwardAxiomIndex::new(&axioms_snap);
+    for step in 0..max_steps {
+        if step > 0 && delta.is_empty() {
+            break;
+        }
 
-    for _step in 0..max_steps {
-        // Snapshot the set of known formula values at the start of this
-        // step so we can detect fixpoint and check novelty without
-        // re-hashing the live map mid-iteration.
-        let known_formulas: Vec<Formula> = universe.givens.values().cloned().collect();
-
+        let delta_index = FactIndex::new(&delta);
+        let known_index = FactIndex::new(&universe.givens);
         let mut new_this_step: Vec<(String, Formula)> = Vec::new();
 
-        let fact_index = FactIndex::new(&universe.givens);
-        let candidate_axioms = forward_index.candidates(&fact_index);
-
-        for axiom_index in candidate_axioms {
-            let axiom = &axioms_snap[axiom_index];
-            // Skip zero-premise axioms that are unconditional equational
-            // rewrite rules — they are already handled by `simp` and
-            // re-deriving them as deductions would just flood the given set
-            // with trivial noise (e.g. `Add(0, x) = x` for every x).
-            // We do keep zero-premise *predicate* facts (statements like
-            // `On(A, L)` stored as axioms) because they might be novel.
-            if axiom.premises.is_empty() {
-                if let Formula::Eq(_, _) = &axiom.conclusion {
-                    // Unconditional equational rewrite — skip.
+        // Premise-free predicate axioms are facts in their own right. Process
+        // them once, rather than once per saturation iteration.
+        if step == 0 {
+            for axiom in &axioms {
+                if !axiom.premises.is_empty() {
                     continue;
                 }
-            }
-
-            // Alpha-rename so axiom variables are fresh for this use.
-            axiom_ctr += 1;
-            let fresh = instantiate_axiom(axiom, axiom_ctr);
-
-            // Find all ways the premises can be satisfied by current givens.
-            let binding_sets = match_premises_forward(
-                &fresh.premises,
-                &universe.givens,
-                &fact_index,
-                &HashMap::new(),
-            );
-
-            for bindings in binding_sets {
-                // Instantiate the conclusion under these bindings.
-                let conclusion = fresh.conclusion.substitute(&bindings);
-
-                // Check: does the conclusion still contain unresolved axiom
-                // variables (i.e. variables that weren't pinned by any
-                // premise)?  If so, it is not ground — skip it.
-                if formula_has_free_vars(&conclusion, &bindings) {
+                if matches!(&axiom.conclusion, Formula::Eq(_, _)) {
                     continue;
                 }
 
-                // Run the simp pass on the instantiated conclusion.
-                let simplified = simp_formula(conclusion, &axioms_snap);
-
-                // Is this conclusion already known?
-                let already_known = known_formulas.contains(&simplified)
-                    || new_this_step.iter().any(|(_, f)| f == &simplified)
-                    || universe.givens.values().any(|f| f == &simplified);
-
-                if !already_known {
+                axiom_counter += 1;
+                let fresh = instantiate_axiom(axiom, axiom_counter);
+                let conclusion = fresh.conclusion.substitute(&HashMap::new());
+                if formula_has_free_vars(&conclusion, &HashMap::new()) {
+                    continue;
+                }
+                let simplified = simp_formula(conclusion, &axioms);
+                if known.insert(simplified.clone()) {
                     deduction_counter += 1;
-                    let name = format!("Deduction_{}", deduction_counter);
-                    new_this_step.push((name, simplified));
+                    new_this_step.push((
+                        format!("Deduction_{}", deduction_counter),
+                        simplified,
+                    ));
                 }
             }
         }
 
-        // If nothing new was found this step we have reached a fixpoint.
+        for axiom_index in rule_index.candidates(&delta_index) {
+            let axiom = &axioms[axiom_index];
+            axiom_counter += 1;
+            let fresh = instantiate_axiom(axiom, axiom_counter);
+
+            // Each premise may act as the delta pivot. This also handles rules
+            // where two or more premises are all satisfied by new facts.
+            for (pivot_index, pivot_premise) in fresh.premises.iter().enumerate() {
+                for delta_name in delta_index.candidates(pivot_premise) {
+                    let Some(delta_fact) = delta.get(delta_name) else { continue; };
+                    let binding_sets = match_premises_forward_delta(
+                        &fresh.premises,
+                        &universe.givens,
+                        &known_index,
+                        pivot_index,
+                        delta_fact,
+                        &HashMap::new(),
+                    );
+
+                    for bindings in binding_sets {
+                        let conclusion = fresh.conclusion.substitute(&bindings);
+                        if formula_has_free_vars(&conclusion, &bindings) {
+                            continue;
+                        }
+
+                        let simplified = simp_formula(conclusion, &axioms);
+                        if known.insert(simplified.clone()) {
+                            deduction_counter += 1;
+                            new_this_step.push((
+                                format!("Deduction_{}", deduction_counter),
+                                simplified,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         if new_this_step.is_empty() {
             break;
         }
 
-        // Commit the new facts to the universe and record them globally.
+        let mut next_delta = HashMap::new();
         for (name, formula) in new_this_step {
             universe.givens.insert(name.clone(), formula.clone());
+            next_delta.insert(name.clone(), formula.clone());
             all_new.push((name, formula));
         }
+        delta = next_delta;
     }
 
     all_new
@@ -875,33 +895,35 @@ fn formula_head(formula: &Formula) -> FormulaHead {
     }
 }
 
-/// Index for forward rules by the outer constructor of their first premise.
+/// Index forward rules by every premise head, allowing any premise to
+/// trigger a rule when a matching delta fact arrives.
 #[derive(Debug, Default)]
 struct ForwardAxiomIndex {
-    by_first_premise: HashMap<FormulaHead, Vec<usize>>,
-    without_premises: Vec<usize>,
+    by_premise_head: HashMap<FormulaHead, Vec<usize>>,
 }
 
 impl ForwardAxiomIndex {
     fn new(axioms: &[Axiom]) -> Self {
         let mut index = Self::default();
         for (position, axiom) in axioms.iter().enumerate() {
-            if let Some(first) = axiom.premises.first() {
-                index.by_first_premise
-                    .entry(formula_head(first))
+            for premise in &axiom.premises {
+                index.by_premise_head
+                    .entry(formula_head(premise))
                     .or_default()
                     .push(position);
-            } else {
-                index.without_premises.push(position);
             }
+        }
+        for positions in index.by_premise_head.values_mut() {
+            positions.sort_unstable();
+            positions.dedup();
         }
         index
     }
 
-    fn candidates(&self, facts: &FactIndex) -> Vec<usize> {
-        let mut candidates = self.without_premises.clone();
-        for (head, positions) in &self.by_first_premise {
-            if facts.contains_head(head) {
+    fn candidates(&self, delta: &FactIndex) -> Vec<usize> {
+        let mut candidates = Vec::new();
+        for (head, positions) in &self.by_premise_head {
+            if delta.contains_head(head) {
                 candidates.extend_from_slice(positions);
             }
         }
@@ -923,6 +945,9 @@ impl FactIndex {
         for (name, formula) in givens {
             index.by_head.entry(formula_head(formula))
                 .or_default().push(name.clone());
+        }
+        for names in index.by_head.values_mut() {
+            names.sort();
         }
         index
     }
@@ -1574,7 +1599,7 @@ mod forward_index_tests {
         let fact_index = FactIndex::new(&givens);
         let rule_index = ForwardAxiomIndex::new(&axioms);
 
-        assert_eq!(rule_index.candidates(&fact_index), vec![0, 2]);
+        assert_eq!(rule_index.candidates(&fact_index), vec![0]);
         assert_eq!(fact_index.candidates(&q).len(), 0);
         assert_eq!(fact_index.candidates(&Formula::Pred("P".into(), vec![
             Term::Var("x".into(), Sort::object()),
@@ -1588,8 +1613,55 @@ mod forward_index_tests {
         let givens = HashMap::from([("alice_is_p".into(), fact)]);
         let index = FactIndex::new(&givens);
 
-        let matches = match_premises_forward(&[premise], &givens, &index, &HashMap::new());
+        let matches = match_premises_forward_delta(
+            &[premise], &givens, &index, 0, &Formula::Pred(
+                "P".into(), vec![Term::Const("alice".into())],
+            ), &HashMap::new(),
+        );
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].get("x"), Some(&Term::Const("alice".into())));
     }
+    #[test]
+    fn semi_naive_deduction_uses_new_facts_as_non_first_premises() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), Sort::object());
+        let a = Term::Const("a".into());
+        let pred = |name: &str, term: Term| Formula::Pred(name.into(), vec![term]);
+
+        universe.givens.insert("p_a".into(), pred("P", a.clone()));
+        universe.givens.insert("s_a".into(), pred("S", a.clone()));
+
+        universe.add_axiom(Axiom {
+            name: "S_implies_Q".into(),
+            vars: vec![("x".into(), Sort::object())],
+            premises: vec![pred("S", x.clone())],
+            conclusion: pred("Q", x.clone()),
+        });
+        universe.add_axiom(Axiom {
+            name: "P_and_Q_implies_R".into(),
+            vars: vec![("x".into(), Sort::object())],
+            premises: vec![pred("P", x.clone()), pred("Q", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let derived = forward_deduce(&mut universe, 5);
+        assert!(derived.iter().any(|(_, f)| *f == pred("Q", a.clone())));
+        assert!(derived.iter().any(|(_, f)| *f == pred("R", a.clone())));
+    }
+
+    #[test]
+    fn semi_naive_deduction_emits_premise_free_facts_once() {
+        let mut universe = Universe::new();
+        universe.add_axiom(Axiom {
+            name: "BaseFact".into(),
+            vars: vec![],
+            premises: vec![],
+            conclusion: Formula::Pred("Base".into(), vec![Term::Const("a".into())]),
+        });
+
+        let derived = forward_deduce(&mut universe, 5);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].1, Formula::Pred("Base".into(), vec![Term::Const("a".into())]));
+    }
+
 }
