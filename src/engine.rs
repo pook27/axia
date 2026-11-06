@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use crate::ast::{Term, Formula, Sort};
 
@@ -663,12 +664,13 @@ fn simplify_term_inner(
 /// from user-introduced variables and prevents them from accidentally
 /// shadowing axiom variable names.
 ///
-/// The counter is passed by mutable reference so it survives across IDDFS
-/// depth iterations within a single `prove()` call.  This guarantees that
+/// The shared counter survives across IDDFS depth iterations within a
+/// single `prove()` call. This guarantees that
 /// Skolem names are unique within one top-level proof attempt.
-fn fresh_skolem(counter: &mut u32) -> String {
-    *counter += 1;
-    format!("?w{}", *counter)
+fn fresh_skolem(counter: &Cell<u32>) -> String {
+    let next = counter.get() + 1;
+    counter.set(next);
+    format!("?w{}", next)
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,6 +1086,9 @@ impl ProofSearchIndex {
                 .or_default()
                 .push(name.clone());
         }
+        for names in index.givens_by_head.values_mut() {
+            names.sort();
+        }
         index
     }
 
@@ -1099,86 +1104,82 @@ impl ProofSearchIndex {
 }
 
 // ---------------------------------------------------------------------------
-// Proof search (IDDFS)
+// Proof search (IDDFS) — trail-backed continuation search
 // ---------------------------------------------------------------------------
+
+/// A continuation is called while the successful branch's substitution is
+/// still active. Returning true stops the search; returning false asks the
+/// caller to roll back this branch and try the next alternative.
+type ProofContinuation<'a> = dyn FnMut(&mut Substitution, ProofStep) -> bool + 'a;
 
 /// Attempt to prove `goal` using axioms from the given `universe`.
 pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<ProofStep> {
-    // ------------------------------------------------------------------
-    // Term rewriting fast-path ("simp")
-    //
-    // Before falling back to IDDFS, deterministically simplify both sides
-    // of an equality goal using the universe's unconditional equational
-    // axioms (e.g. arithmetic facts like `Mul(2,3) = 6`). This collapses
-    // long Eq_Trans chains that DFS would otherwise have to *search for*
-    // into a single linear-time rewrite pass.
-    // ------------------------------------------------------------------
     let goal = match goal {
         Formula::Eq(left, right) => {
-            let simped_left  = simplify_term(left,  &universe.axioms);
+            let simped_left = simplify_term(left, &universe.axioms);
             let simped_right = simplify_term(right, &universe.axioms);
-
             if simped_left == simped_right {
-                // Fully reduced both sides to the same term — trivially true
                 let refl_goal = Formula::Eq(simped_left.clone(), simped_right.clone());
                 return Some(ProofStep::simple(refl_goal, "Eq_Refl", vec![]));
             }
             Formula::Eq(simped_left, simped_right)
         }
-        Formula::Pred(name, args) => {
-            // ---> NEW: Simplify arguments inside Logical Predicates! <---
-            let simped_args: Vec<Term> = args.iter()
-                .map(|a| simplify_term(a, &universe.axioms))
-                .collect();
-            Formula::Pred(name.clone(), simped_args)
-        }
+        Formula::Pred(name, args) => Formula::Pred(
+            name.clone(),
+            args.iter().map(|a| simplify_term(a, &universe.axioms)).collect(),
+        ),
         _ => goal.clone(),
     };
-    let goal = &goal;
 
-    // ------------------------------------------------------------------
-    // Forward lookup — Givens
-    //
-    // Before starting any IDDFS iteration, check whether the (simplified)
-    // goal unifies directly with a named Given or Deduction.  This is
-    // O(|givens|) and fires before any depth-1 search node is expanded.
-    // ------------------------------------------------------------------
     let facts = universe.all_facts();
     let search_index = ProofSearchIndex::new(&universe.axioms, &facts);
 
-    for given_name in search_index.given_candidates(goal) {
+    // Keep the direct fact lookup as a cheap fast path.
+    for given_name in search_index.given_candidates(&goal) {
         if let Some(given_formula) = facts.get(given_name) {
-            if let Some(_bindings) = given_formula.unify(goal) {
+            let mut subst = Substitution::new();
+            if given_formula.unify_into(&goal, &mut subst) {
                 return Some(ProofStep::simple(
-                        goal.clone(),
-                        format!("Given {}", given_name),
-                        vec![],
+                    goal.clone(),
+                    format!("Given {}", given_name),
+                    vec![],
                 ));
             }
         }
     }
 
-    let mut skolem_counter = 0u32;
-    let mut axiom_counter  = 0usize;
-    // Global node budget. Shared across the whole IDDFS run (all depths),
-    // so a single call to `prove` can never expand more than this many
-    // `prove_dfs` nodes in total, regardless of how many depth iterations
-    // are attempted or how branchy the search tree becomes.
-    let mut operations_budget: usize = 500_000;
+    let skolem_counter = Cell::new(0u32);
+    let axiom_counter = Cell::new(0usize);
+    let operations_budget = Cell::new(500_000usize);
+
     for depth in 1..=max_depth {
-        let proofs = prove_dfs(goal, &universe.axioms, &facts, &search_index, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
-        if let Some((mut proof, final_bindings)) = proofs.into_iter().next() {
-            // Wash the entire proof tree with the final resolved bindings so
-            // that Skolem variables (?wN) and alpha-renamed axiom variables
-            // (x_9) that were snapshotted with incomplete bindings during the
-            // DFS are all replaced with their ultimate ground terms before the
-            // formatter sees the tree.
+        let mut subst = Substitution::new();
+        let mut found = None;
+
+        prove_dfs(
+            &goal,
+            &universe.axioms,
+            &facts,
+            &search_index,
+            depth,
+            &mut subst,
+            &[],
+            &skolem_counter,
+            &axiom_counter,
+            &operations_budget,
+            &mut |subst, proof| {
+                // This is the only full binding-map snapshot in a successful
+                // search. All intermediate alternatives share the undo trail.
+                found = Some((proof, subst.as_bindings().clone()));
+                true
+            },
+        );
+
+        if let Some((mut proof, final_bindings)) = found {
             proof.apply_bindings(&final_bindings);
             return Some(proof);
         }
-        if operations_budget == 0 {
-            // No point iterating to greater depths — we've already spent
-            // the entire search budget without finding a proof.
+        if operations_budget.get() == 0 {
             break;
         }
     }
@@ -1191,246 +1192,265 @@ pub fn prove_checked(
     max_depth: u32,
 ) -> Result<Option<ProofStep>, String> {
     universe.validate_formula(goal)?;
-
     Ok(prove(goal, universe, max_depth))
 }
 
-/// Core backward-chaining DFS.
+/// Search one goal using a shared substitution trail.
 ///
-/// Returns `(ProofStep, Bindings)` on success, `None` on failure.
-///
-/// # Arguments
-/// * `goal`          — Formula to prove (may still contain free variables).
-/// * `axioms`        — Available axioms (from the active Universe).
-/// * `depth`         — Remaining depth budget for this IDDFS iteration.
-/// * `bindings`      — Variable substitutions accumulated so far.
-/// * `path`          — Stack of goals on the current branch (cycle detection).
-/// * `skolem_ctr`    — Mutable counter for fresh Skolem name generation.
-/// * `axiom_ctr`     — Mutable counter for alpha-renaming axiom variables.
-/// * `operations_budget` — Global node budget shared across the entire IDDFS
-///   run. Decremented once per `prove_dfs` call; when it hits zero the
-///   search is aborted everywhere by returning empty result sets, which
-///   unwinds the whole recursion without finding (or claiming) a proof.
+/// Every candidate owns a checkpoint. Its continuation runs before that
+/// checkpoint is rolled back, which lets conjunctions and axiom premises
+/// explore their next subgoal using the bindings established by earlier ones.
+/// A failed later subgoal therefore backtracks into the earlier candidate
+/// without cloning or merging complete binding maps.
 fn prove_dfs(
-    goal:       &Formula,
-    axioms:     &[Axiom],
-    givens:     &HashMap<String, Formula>,
+    goal: &Formula,
+    axioms: &[Axiom],
+    givens: &HashMap<String, Formula>,
     search_index: &ProofSearchIndex,
-    depth:      u32,
-    bindings:   &Bindings,
-    path:       &[Formula],
-    skolem_ctr: &mut u32,
-    axiom_ctr:  &mut usize,
-    operations_budget: &mut usize,
-) -> Vec<(ProofStep, Bindings)> {
-    if depth == 0 { return vec![]; }
+    depth: u32,
+    subst: &mut Substitution,
+    path: &[Formula],
+    skolem_ctr: &Cell<u32>,
+    axiom_ctr: &Cell<usize>,
+    operations_budget: &Cell<usize>,
+    continuation: &mut ProofContinuation<'_>,
+) -> bool {
+    if depth == 0 || operations_budget.get() == 0 {
+        return false;
+    }
+    operations_budget.set(operations_budget.get() - 1);
 
-    // ------------------------------------------------------------------
-    // Global search budget (node cutoff)
-    //
-    // Each call to `prove_dfs` counts as one "node" expansion. Once the
-    // shared budget is exhausted we abort immediately and unwind: every
-    // caller up the stack will also see an empty result and stop too,
-    // so this single check is enough to bound the *entire* search tree
-    // (across all depths/branches) to `operations_budget` node visits.
-    // ------------------------------------------------------------------
-    if *operations_budget == 0 { return vec![]; }
-    *operations_budget -= 1;
+    let current_goal = goal.substitute(subst.as_bindings());
 
-    let current_goal = goal.substitute(bindings);
-
-    // ------------------------------------------------------------------
-    // Syntactic equality fast-path  (Eq_Refl)
-    //
-    // If the goal is `a = b` and `a` and `b` are structurally identical
-    // after substitution (e.g. `4 = 4`), it's trivially true by
-    // reflexivity. Short-circuit here so the engine never wastes a
-    // search node — let alone an entire branch of Eq_Trans/Eq_Sym/
-    // Cong_* applications — trying to *derive* `4 = ?y AND ?y = 4`.
-    // ------------------------------------------------------------------
-    if let Formula::Eq(l, r) = &current_goal {
-        if l == r {
-            return vec![(ProofStep::simple(current_goal.clone(), "Eq_Refl", vec![]), bindings.clone())];
+    if let Formula::Eq(left, right) = &current_goal {
+        if left == right {
+            return continuation(
+                subst,
+                ProofStep::simple(current_goal, "Eq_Refl", vec![]),
+            );
         }
     }
 
-    // ------------------------------------------------------------------
-    // Forward lookup — Givens (inside DFS)
-    //
-    // At every DFS node we check whether the current (substituted) goal
-    // is directly entailed by a named Given or Deduction.  This handles
-    // sub-goals that arise mid-search, e.g. an axiom's premise that
-    // happens to match an established hypothesis.  The check is O(|givens|)
-    // and short-circuits immediately on the first match, just like Eq_Refl.
-    // ------------------------------------------------------------------
+    // Facts are tried in index order. The index sorts names so the first
+    // successful proof is stable across HashMap iteration orders.
     for given_name in search_index.given_candidates(&current_goal) {
-        if let Some(given_formula) = givens.get(given_name) {
-            if let Some(new_bindings) = given_formula.unify(&current_goal) {
-                let mut merged = bindings.clone();
-                merged.extend(new_bindings);
-                return vec![(
-                    ProofStep::simple(current_goal.clone(), format!("Given {}", given_name), vec![]),
-                    merged,
-                )];
+        let Some(given_formula) = givens.get(given_name) else { continue; };
+        let checkpoint = subst.checkpoint();
+        if given_formula.unify_into(&current_goal, subst) {
+            let stop = continuation(
+                subst,
+                ProofStep::simple(
+                    current_goal.clone(),
+                    format!("Given {}", given_name),
+                    vec![],
+                ),
+            );
+            subst.rollback(checkpoint);
+            if stop {
+                return true;
             }
         }
+        // unify_into is transactional on failure; successful attempts are
+        // rolled back above, before another fact is considered.
     }
 
-    // ------------------------------------------------------------------
-    // Cycle detection
-    //
-    // We compare structurally.  Skolem constants (`?wN`) appear as Var
-    // nodes with globally unique names, so an existential sub-goal
-    // `P(?w1)` will never accidentally match a prior `P(?w2)` — no
-    // spurious cycle pruning occurs.
-    //
-    // We deliberately do NOT add the Exists wrapper to the path; instead
-    // we add the instantiated body (below).  This prevents the wrapper from
-    // being mistaken for a cycle if the same existential is encountered on
-    // a different branch.
-    // ------------------------------------------------------------------
-    if path.contains(&current_goal) { return vec![]; }
+    if path.contains(&current_goal) {
+        return false;
+    }
 
-    let mut results = Vec::new();
+    let mut next_path = path.to_vec();
+    next_path.push(current_goal.clone());
 
-    // ------------------------------------------------------------------
-    // Structural rule: Conjunction  (A ∧ B)
-    // ------------------------------------------------------------------
-    if let Formula::And(left, right) = &current_goal {
-        let mut path2 = path.to_vec(); path2.push(current_goal.clone());
-        for (p1, b1) in prove_dfs(left, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
-            let right_sub = right.substitute(&b1);
-            for (p2, b2) in prove_dfs(&right_sub, axioms, givens, search_index, depth, &b1, &path2, skolem_ctr, axiom_ctr, operations_budget) {
-                results.push((
-                        ProofStep::simple(current_goal.clone(), "Conjunction", vec![p1.clone(), p2]),
-                        b2,
-                ));
-                if results.len() >= 3 { return results; } // <-- CAP
+    match &current_goal {
+        Formula::And(left, right) => {
+            prove_dfs(
+                left, axioms, givens, search_index, depth, subst, &next_path,
+                skolem_ctr, axiom_ctr, operations_budget,
+                &mut |subst, left_proof| {
+                    let right_goal = right.substitute(subst.as_bindings());
+                    prove_dfs(
+                        &right_goal, axioms, givens, search_index, depth, subst,
+                        &next_path, skolem_ctr, axiom_ctr, operations_budget,
+                        &mut |subst, right_proof| {
+                            continuation(
+                                subst,
+                                ProofStep::simple(
+                                    current_goal.clone(),
+                                    "Conjunction",
+                                    vec![left_proof.clone(), right_proof],
+                                ),
+                            )
+                        },
+                    )
+                },
+            )
+        }
+        Formula::Or(left, right) => {
+            let left_succeeded = prove_dfs(
+                left, axioms, givens, search_index, depth, subst, &next_path,
+                skolem_ctr, axiom_ctr, operations_budget,
+                &mut |subst, proof| {
+                    continuation(
+                        subst,
+                        ProofStep::simple(
+                            current_goal.clone(),
+                            "Disjunction_Left",
+                            vec![proof],
+                        ),
+                    )
+                },
+            );
+            if left_succeeded {
+                true
+            } else {
+                prove_dfs(
+                    right, axioms, givens, search_index, depth, subst, &next_path,
+                    skolem_ctr, axiom_ctr, operations_budget,
+                    &mut |subst, proof| {
+                        continuation(
+                            subst,
+                            ProofStep::simple(
+                                current_goal.clone(),
+                                "Disjunction_Right",
+                                vec![proof],
+                            ),
+                        )
+                    },
+                )
             }
         }
-        return results;
-    }
+        Formula::Exists { var, sort, body } => {
+            let skolem_name = fresh_skolem(skolem_ctr);
+            let skolem_term = Term::Var(skolem_name, sort.clone());
+            let checkpoint = subst.checkpoint();
+            subst.bind(var.clone(), skolem_term.clone());
+            let witness_goal = body.substitute(subst.as_bindings());
 
-    // ------------------------------------------------------------------
-    // Structural rule: Disjunction  (A ∨ B)
-    // ------------------------------------------------------------------
-    if let Formula::Or(left, right) = &current_goal {
-        let mut path2 = path.to_vec(); path2.push(current_goal.clone());
-        for (p, b) in prove_dfs(left, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
-            results.push((ProofStep::simple(current_goal.clone(), "Disjunction_Left", vec![p]), b));
-            if results.len() >= 3 { return results; } // <-- CAP
+            let stop = prove_dfs(
+                &witness_goal, axioms, givens, search_index, depth - 1, subst,
+                &next_path, skolem_ctr, axiom_ctr, operations_budget,
+                &mut |subst, sub_proof| {
+                    let resolved_witness = skolem_term.substitute(subst.as_bindings());
+                    let concrete_goal = witness_goal.substitute(subst.as_bindings());
+                    let mut step = ProofStep {
+                        goal: current_goal.clone(),
+                        rule_name: "Existential_Instantiation".to_string(),
+                        sub_proofs: vec![sub_proof],
+                        witnesses: vec![(var.clone(), resolved_witness)],
+                    };
+                    step.sub_proofs[0].goal = concrete_goal;
+                    continuation(subst, step)
+                },
+            );
+            subst.rollback(checkpoint);
+            stop
         }
-        for (p, b) in prove_dfs(right, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
-            results.push((ProofStep::simple(current_goal.clone(), "Disjunction_Right", vec![p]), b));
-            if results.len() >= 3 { return results; } // <-- CAP
-        }
-        return results;
-    }
+        _ => {
+            for &axiom_index in search_index.axiom_candidates(&current_goal) {
+                if operations_budget.get() == 0 {
+                    return false;
+                }
 
-    // ------------------------------------------------------------------
-    // Structural rule: Existential Instantiation  (∃ x : S, P(x))
-    //
-    // Algorithm:
-    //  1. Mint a fresh Skolem constant `?wN` with the declared sort.
-    //  2. Substitute `x := ?wN` in the body, producing the witness goal.
-    //  3. Add ONLY the witness goal to the path (not the ∃ wrapper) so
-    //     cycle detection operates on what we are actually trying to prove.
-    //  4. Recursively prove the witness goal.
-    //  5. After success, resolve `?wN` in the returned bindings to obtain
-    //     the concrete witness term (if any).
-    //  6. Apply ALL final bindings to the witness goal so the stored
-    //     `ProofStep.goal` shows the fully-concrete formula.
-    //  7. Return the witness pair in `ProofStep.witnesses` for the formatter.
-    // ------------------------------------------------------------------
-    if let Formula::Exists { var, sort, body } = &current_goal {
-        let skolem_name = fresh_skolem(skolem_ctr);
-        let skolem_term = Term::Var(skolem_name.clone(), sort.clone());
+                let axiom = &axioms[axiom_index];
+                axiom_ctr.set(axiom_ctr.get() + 1);
+                let fresh_axiom = instantiate_axiom(axiom, axiom_ctr.get());
+                let checkpoint = subst.checkpoint();
 
-        // Build  body[var := ?wN]
-        let mut witness_bindings = bindings.clone();
-        witness_bindings.insert(var.clone(), skolem_term.clone());
-        let witness_goal = body.substitute(&witness_bindings);
-
-        let mut path2 = path.to_vec();
-        path2.push(current_goal.clone()); // Push the Exists wrapper to prevent immediate cycle death
-
-        for (sub_proof, final_bindings) in prove_dfs(&witness_goal, axioms, givens, search_index, depth - 1, &witness_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
-            let resolved_witness = skolem_term.substitute(&final_bindings);
-            let concrete_goal = witness_goal.substitute(&final_bindings);
-
-            let mut step = ProofStep {
-                goal:       current_goal.clone(),
-                rule_name:  "Existential_Instantiation".to_string(),
-                sub_proofs: vec![sub_proof],
-                witnesses:  vec![(var.clone(), resolved_witness)],
-            };
-
-            let mut merged = bindings.clone();
-            merged.extend(final_bindings);
-
-            step.sub_proofs[0].goal = concrete_goal;
-            results.push((step, merged));
-            if results.len() >= 3 { return results; } // <-- CAP
-        }
-        return results;
-    }
-
-    // ------------------------------------------------------------------
-    // Axiom matching (backward chaining)
-    // ------------------------------------------------------------------
-    let mut path2 = path.to_vec(); path2.push(current_goal.clone());
-
-    for &axiom_index in search_index.axiom_candidates(&current_goal) {
-        let axiom = &axioms[axiom_index];
-        // Alpha-rename the axiom's universally-quantified variables so that
-        // two applications of the same axiom on the same branch cannot
-        // collide in the shared `bindings` map.
-        *axiom_ctr += 1;
-        let fresh_axiom = instantiate_axiom(axiom, *axiom_ctr);
-
-        if let Some(new_bindings) = fresh_axiom.conclusion.unify(&current_goal) {
-            // Track all valid branching states: (list of subproofs, accumulated bindings)
-            let mut branch_states = vec![(Vec::new(), {
-                let mut b = bindings.clone();
-                b.extend(new_bindings);
-                b
-            })];
-
-            // Fold over each premise
-            for premise in &fresh_axiom.premises {
-                let mut next_states = Vec::new();
-                for (sub_proofs_so_far, current_bindings) in branch_states {
-                    let p_sub = premise.substitute(&current_bindings);
-                    let premise_proofs = prove_dfs(&p_sub, axioms, givens, search_index, depth - 1, &current_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget);
-
-                    for (proof, b_out) in premise_proofs {
-                        let mut next_proofs = sub_proofs_so_far.clone();
-                        next_proofs.push(proof);
-
-                        let mut next_bindings = current_bindings.clone();
-                        next_bindings.extend(b_out);
-
-                        next_states.push((next_proofs, next_bindings));
-                        if next_states.len() >= 5 { break; } // <-- CAP
+                if fresh_axiom.conclusion.unify_into(&current_goal, subst) {
+                    let stop = prove_axiom_premises(
+                        &fresh_axiom.premises,
+                        0,
+                        axioms,
+                        givens,
+                        search_index,
+                        depth,
+                        subst,
+                        &next_path,
+                        skolem_ctr,
+                        axiom_ctr,
+                        operations_budget,
+                        &current_goal,
+                        &fresh_axiom.name,
+                        Vec::new(),
+                        continuation,
+                    );
+                    subst.rollback(checkpoint);
+                    if stop {
+                        return true;
                     }
                 }
-                branch_states = next_states;
             }
-
-            // Any state that survived all premises is a valid proof
-            for (sub_proofs, final_bindings) in branch_states {
-                results.push((
-                        ProofStep::simple(current_goal.clone(), axiom.name.clone(), sub_proofs),
-                        final_bindings,
-                ));
-                if results.len() >= 3 { return results; } // <-- CAP
-            }
+            false
         }
-        if results.len() >= 3 { return results; } // <-- STOP CHECKING AXIOMS IF WE HAVE ENOUGH
-        if *operations_budget == 0 { return results; } // <-- BUDGET EXHAUSTED, STOP EXPLORING
+    }
+}
+
+/// Prove an axiom's premises left-to-right while retaining the same mutable
+/// substitution. A later premise can reject an earlier match, causing that
+/// earlier goal's search to resume at its next candidate.
+#[allow(clippy::too_many_arguments)]
+fn prove_axiom_premises(
+    premises: &[Formula],
+    position: usize,
+    axioms: &[Axiom],
+    givens: &HashMap<String, Formula>,
+    search_index: &ProofSearchIndex,
+    depth: u32,
+    subst: &mut Substitution,
+    path: &[Formula],
+    skolem_ctr: &Cell<u32>,
+    axiom_ctr: &Cell<usize>,
+    operations_budget: &Cell<usize>,
+    root_goal: &Formula,
+    rule_name: &str,
+    sub_proofs: Vec<ProofStep>,
+    continuation: &mut ProofContinuation<'_>,
+) -> bool {
+    if position == premises.len() {
+        return continuation(
+            subst,
+            ProofStep::simple(root_goal.clone(), rule_name, sub_proofs),
+        );
     }
 
-    results
+    if depth <= 1 || operations_budget.get() == 0 {
+        return false;
+    }
+
+    let premise_goal = premises[position].substitute(subst.as_bindings());
+    prove_dfs(
+        &premise_goal,
+        axioms,
+        givens,
+        search_index,
+        depth - 1,
+        subst,
+        path,
+        skolem_ctr,
+        axiom_ctr,
+        operations_budget,
+        &mut |subst, proof| {
+            let mut next_proofs = sub_proofs.clone();
+            next_proofs.push(proof);
+            prove_axiom_premises(
+                premises,
+                position + 1,
+                axioms,
+                givens,
+                search_index,
+                depth,
+                subst,
+                path,
+                skolem_ctr,
+                axiom_ctr,
+                operations_budget,
+                root_goal,
+                rule_name,
+                next_proofs,
+                continuation,
+            )
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1868,3 +1888,128 @@ mod rollback_substitution_tests {
     }
 }
 
+
+
+#[cfg(test)]
+mod trail_backtracking_tests {
+    use super::*;
+
+    fn var(name: &str) -> Term {
+        Term::Var(name.into(), Sort::object())
+    }
+
+    fn constant(name: &str) -> Term {
+        Term::Const(name.into())
+    }
+
+    fn pred(name: &str, term: Term) -> Formula {
+        Formula::Pred(name.into(), vec![term])
+    }
+
+    #[test]
+    fn conjunction_backtracks_into_earlier_goal_without_leaking_bindings() {
+        let mut universe = Universe::new();
+        let a = constant("a");
+        let b = constant("b");
+        let x = var("x");
+
+        // P(a) is deliberately tried before P(b). It binds x to a, but the
+        // second conjunct cannot be proved with that binding. Search must
+        // revisit the first conjunct and try P(b).
+        universe.add_given("P_a".into(), pred("P", a));
+        universe.add_given("P_b".into(), pred("P", b.clone()));
+        universe.add_given("T_b".into(), pred("T", b.clone()));
+        universe.add_axiom(Axiom {
+            name: "P_implies_R".into(),
+            vars: vec!["x".into()],
+            premises: vec![pred("P", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let goal = Formula::And(
+            Box::new(pred("R", var("x"))),
+            Box::new(pred("T", var("x"))),
+        );
+        let proof = prove(&goal, &universe, 3).expect("the conjunction should be provable");
+
+        let expected = Formula::And(
+            Box::new(pred("R", constant("b"))),
+            Box::new(pred("T", constant("b"))),
+        );
+        assert_eq!(proof.goal, expected);
+        assert_eq!(proof.sub_proofs.len(), 2);
+    }
+
+    #[test]
+    fn axiom_premises_share_bindings_across_the_entire_rule_application() {
+        let mut universe = Universe::new();
+        let a = constant("a");
+        let b = constant("b");
+        let x = var("x");
+
+        universe.add_given("P_a".into(), pred("P", a));
+        universe.add_given("P_b".into(), pred("P", b.clone()));
+        universe.add_given("S_b".into(), pred("S", b.clone()));
+        universe.add_axiom(Axiom {
+            name: "P_and_S_implies_R".into(),
+            vars: vec!["x".into()],
+            premises: vec![pred("P", x.clone()), pred("S", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let proof = prove(&pred("R", var("result")), &universe, 3)
+            .expect("the rule should backtrack from a to b");
+
+        assert_eq!(proof.goal, pred("R", constant("b")));
+        assert_eq!(proof.sub_proofs.len(), 2);
+    }
+}
+
+
+#[cfg(test)]
+mod trail_structural_search_tests {
+    use super::*;
+
+    fn var(name: &str) -> Term {
+        Term::Var(name.into(), Sort::object())
+    }
+
+    fn constant(name: &str) -> Term {
+        Term::Const(name.into())
+    }
+
+    fn pred(name: &str, term: Term) -> Formula {
+        Formula::Pred(name.into(), vec![term])
+    }
+
+    #[test]
+    fn existential_instantiation_preserves_the_resolved_witness() {
+        let mut universe = Universe::new();
+        universe.add_given("P_a".into(), pred("P", constant("a")));
+
+        let goal = Formula::Exists {
+            var: "x".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("P", var("x"))),
+        };
+        let proof = prove(&goal, &universe, 2).expect("the existential should be provable");
+
+        assert_eq!(proof.witnesses, vec![("x".into(), constant("a"))]);
+        assert_eq!(proof.sub_proofs[0].goal, pred("P", constant("a")));
+    }
+
+    #[test]
+    fn disjunction_search_tries_the_right_branch_after_left_fails() {
+        let mut universe = Universe::new();
+        universe.add_given("Q_a".into(), pred("Q", constant("a")));
+
+        let goal = Formula::Or(
+            Box::new(pred("P", constant("a"))),
+            Box::new(pred("Q", constant("a"))),
+        );
+        let proof = prove(&goal, &universe, 1).expect("the right disjunct should be provable");
+
+        assert_eq!(proof.rule_name, "Disjunction_Right");
+        assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
+    }
+}
