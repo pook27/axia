@@ -1441,21 +1441,18 @@ fn prove_axiom_premises(
     continuation: &mut ProofContinuation<'_>,
 ) -> bool {
     if position == premises.len() {
+        let instantiations = axiom_vars
+            .iter()
+            .filter_map(|(original, fresh)| {
+                subst.get(fresh).map(|term| (original.clone(), subst.resolve(term)))
+            })
+            .collect();
         return continuation(
             subst,
-            let instantiations = axiom_vars
-                .iter()
-                .filter_map(|(original, fresh)| {
-                    subst.get(fresh).map(|term| (original.clone(), subst.resolve(term)))
-                })
-                .collect();
-            continuation(
-                subst,
-                ProofStep::simple(
-                    root_goal.clone(),
-                    ProofRule::Axiom(axiom_name.to_string(), instantiations),
-                    sub_proofs,
-                ),
+            ProofStep::simple(
+                root_goal.clone(),
+                ProofRule::Axiom(axiom_name.to_string(), instantiations),
+                sub_proofs,
             ),
         );
     }
