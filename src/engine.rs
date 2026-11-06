@@ -152,6 +152,79 @@ impl Universe {
         }
     }
 
+    pub fn validate_formula(&self, formula: &Formula) -> Result<(), String> {
+        match formula {
+            Formula::Eq(left, right) => {
+                let left_sort = self.infer_term_sort(left)?;
+                let right_sort = self.infer_term_sort(right)?;
+
+                if let (Some(left), Some(right)) = (left_sort, right_sort) {
+                    if left != right {
+                        return Err(format!(
+                                "equality compares incompatible sorts: {} and {}",
+                                left, right
+                        ));
+                    }
+                }
+
+                Ok(())
+            }
+
+            Formula::Pred(name, args) => {
+                let Some((expected_sorts, return_sort)) = self.predicates.get(name) else {
+                    return Err(format!("undeclared predicate: {}", name));
+                };
+
+                if return_sort != "Prop" {
+                    return Err(format!(
+                            "{} is not a predicate (its return sort is {})",
+                            name, return_sort
+                    ));
+                }
+
+                if args.len() != expected_sorts.len() {
+                    return Err(format!(
+                            "{} expects {} argument(s), but received {}",
+                            name,
+                            expected_sorts.len(),
+                            args.len()
+                    ));
+                }
+
+                for (index, (arg, expected)) in
+                    args.iter().zip(expected_sorts).enumerate()
+                {
+                    if let Some(actual) = self.infer_term_sort(arg)? {
+                        if actual.0 != *expected {
+                            return Err(format!(
+                                    "argument {} of {} expects {}, but received {}",
+                                    index + 1,
+                                    name,
+                                    expected,
+                                    actual
+                            ));
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+
+            Formula::And(left, right)
+                | Formula::Or(left, right)
+                | Formula::Implies(left, right) => {
+                    self.validate_formula(left)?;
+                    self.validate_formula(right)
+                }
+
+            Formula::Not(inner) => self.validate_formula(inner),
+
+            Formula::Exists { body, .. } => {
+                self.validate_formula(body)
+            }
+        }
+    }
+
     pub fn add_given(&mut self, name: String, formula: Formula) {
         self.givens.insert(name, formula);
     }
@@ -1127,5 +1200,55 @@ mod sort_inference_tests {
             universe.infer_term_sort(&Term::Var("x".into(), Sort::object())),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn accepts_valid_predicate() {
+        let mut universe = Universe::new();
+        universe.add_constant("alice".into(), Sort("Person".into()));
+        universe.add_predicate(
+            "Human".into(),
+            vec!["Person".into()],
+            "Prop".into(),
+        );
+
+        let formula = Formula::Pred(
+            "Human".into(),
+            vec![Term::Const("alice".into())],
+        );
+
+        assert!(universe.validate_formula(&formula).is_ok());
+    }
+
+#[test]
+    fn rejects_predicate_argument_sort_mismatch() {
+        let mut universe = Universe::new();
+        universe.add_constant("red".into(), Sort("Color".into()));
+        universe.add_predicate(
+            "Human".into(),
+            vec!["Person".into()],
+            "Prop".into(),
+        );
+
+        let formula = Formula::Pred(
+            "Human".into(),
+            vec![Term::Const("red".into())],
+        );
+
+        assert!(universe.validate_formula(&formula).is_err());
+    }
+
+#[test]
+    fn rejects_equality_between_different_sorts() {
+        let mut universe = Universe::new();
+        universe.add_constant("alice".into(), Sort("Person".into()));
+        universe.add_constant("red".into(), Sort("Color".into()));
+
+        let formula = Formula::Eq(
+            Term::Const("alice".into()),
+            Term::Const("red".into()),
+        );
+
+        assert!(universe.validate_formula(&formula).is_err());
     }
 }
