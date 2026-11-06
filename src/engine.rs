@@ -122,6 +122,13 @@ impl Universe {
                     return Ok(None);
                 };
 
+                if return_sort == "Prop" {
+                    return Err(format!(
+                            "{} is a predicate and cannot be used as a term",
+                            name
+                    ));
+                }
+
                 if args.len() != expected_sorts.len() {
                     return Err(format!(
                             "{} expects {} argument(s), but received {}",
@@ -1251,4 +1258,23 @@ mod sort_inference_tests {
 
         assert!(universe.validate_formula(&formula).is_err());
     }
+}
+
+#[test]
+fn rejects_predicate_used_as_term() {
+    let mut universe = Universe::new();
+
+    universe.add_constant("alice".into(), Sort("Person".into()));
+    universe.add_predicate(
+        "Human".into(),
+        vec!["Person".into()],
+        "Prop".into(),
+    );
+
+    let term = Term::Apply(
+        "Human".into(),
+        vec![Term::Const("alice".into())],
+    );
+
+    assert!(universe.infer_term_sort(&term).is_err());
 }
