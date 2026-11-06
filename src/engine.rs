@@ -485,41 +485,73 @@ pub fn pattern_match(pattern: &Term, target: &Term, bindings: &mut Bindings) -> 
 ///    → 6`).
 /// 4. If no axiom matches, the (bottom-up-simplified) term is the final
 ///    result.
+/// Maximum number of rewrite steps performed during one simplification.
+const MAX_SIMPLIFY_REWRITES: usize = 256;
+
+/// Simplify a term using unconditional equational axioms.
+///
+/// Rewriting is bottom-up and deterministic. A rewrite chain stops when it
+/// reaches a normal form, revisits a term on the current recursive path, or
+/// consumes the rewrite budget. In the latter two cases the last
+/// non-repeating term is returned; simplification is best-effort rather than
+/// an unbounded process.
 pub fn simplify_term(term: &Term, axioms: &[Axiom]) -> Term {
-    // Step 1: simplify bottom-up — reduce all arguments first.
+    let mut remaining = MAX_SIMPLIFY_REWRITES;
+    simplify_term_inner(term, axioms, &mut remaining, &mut Vec::new())
+}
+
+fn simplify_term_inner(
+    term: &Term,
+    axioms: &[Axiom],
+    remaining: &mut usize,
+    active: &mut Vec<Term>,
+) -> Term {
+    // Simplify children first. The active path is shared so a rewrite such as
+    // x -> f(x) cannot recursively normalize the same term forever.
     let current_term = match term {
         Term::Apply(name, args) => {
-            let simplified_args: Vec<Term> = args.iter()
-                .map(|a| simplify_term(a, axioms))
+            let simplified_args: Vec<Term> = args
+                .iter()
+                .map(|arg| simplify_term_inner(arg, axioms, remaining, active))
                 .collect();
             Term::Apply(name.clone(), simplified_args)
         }
-        // Vars and Consts have no sub-terms to reduce.
         Term::Var(_, _) | Term::Const(_) => term.clone(),
     };
 
-    // Step 2/3: try every unconditional equational axiom as a rewrite rule.
+    if *remaining == 0 || active.contains(&current_term) {
+        return current_term;
+    }
+
+    active.push(current_term.clone());
+
     for axiom in axioms {
-        if !axiom.premises.is_empty() { continue; }
+        if !axiom.premises.is_empty() {
+            continue;
+        }
+
         if let Formula::Eq(lhs, rhs) = &axiom.conclusion {
             let mut bindings = Bindings::new();
             if pattern_match(lhs, &current_term, &mut bindings) {
                 let rewritten = rhs.substitute(&bindings);
 
-                // ---> THE FIX: PREVENT INFINITE REWRITE LOOPS <---
-                // If the rewrite rule doesn't actually change the term 
-                // (like Eq_Refl mapping `x` to `x`), ignore it!
-                if rewritten == current_term {
+                if rewritten == current_term || active.contains(&rewritten) {
                     continue;
                 }
 
-                // Keep reducing — the rewrite may expose new redexes.
-                return simplify_term(&rewritten, axioms);
+                if *remaining == 0 {
+                    break;
+                }
+
+                *remaining -= 1;
+                let result = simplify_term_inner(&rewritten, axioms, remaining, active);
+                active.pop();
+                return result;
             }
         }
     }
 
-    // Step 4: nothing more to do.
+    active.pop();
     current_term
 }
 
@@ -1287,4 +1319,54 @@ fn rejects_predicate_used_as_term() {
     );
 
     assert!(universe.infer_term_sort(&term).is_err());
+}
+
+#[cfg(test)]
+mod simplifier_termination_tests {
+    use super::*;
+
+    fn rewrite(lhs: Term, rhs: Term) -> Axiom {
+        Axiom {
+            name: "rewrite".into(),
+            vars: vec![],
+            premises: vec![],
+            conclusion: Formula::Eq(lhs, rhs),
+        }
+    }
+
+    #[test]
+    fn simplifier_stops_on_two_rule_cycles() {
+        let axioms = vec![
+            rewrite(Term::Const("A".into()), Term::Const("B".into())),
+            rewrite(Term::Const("B".into()), Term::Const("A".into())),
+        ];
+
+        // The second rewrite would revisit A, so the engine returns B.
+        assert_eq!(
+            simplify_term(&Term::Const("A".into()), &axioms),
+            Term::Const("B".into())
+        );
+    }
+
+    #[test]
+    fn simplifier_stops_when_rewrite_budget_is_exhausted() {
+        let variable = Term::Var("x".into(), Sort::object());
+        let expanding_rule = rewrite(
+            variable.clone(),
+            Term::Apply("f".into(), vec![variable]),
+        );
+
+        let result = simplify_term(&Term::Const("a".into()), &[expanding_rule]);
+
+        fn unary_depth(term: &Term) -> usize {
+            match term {
+                Term::Apply(name, args) if name == "f" && args.len() == 1 => {
+                    1 + unary_depth(&args[0])
+                }
+                _ => 0,
+            }
+        }
+
+        assert_eq!(unary_depth(&result), MAX_SIMPLIFY_REWRITES);
+    }
 }
