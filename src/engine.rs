@@ -896,6 +896,16 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     None
 }
 
+pub fn prove_checked(
+    goal: &Formula,
+    universe: &Universe,
+    max_depth: u32,
+) -> Result<Option<ProofStep>, String> {
+    universe.validate_formula(goal)?;
+
+    Ok(prove(goal, universe, max_depth))
+}
+
 /// Core backward-chaining DFS.
 ///
 /// Returns `(ProofStep, Bindings)` on success, `None` on failure.

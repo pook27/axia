@@ -11,7 +11,7 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use parser::{lex, Parser};
 use ast::{Statement, Formula, Sort};
-use engine::{Axiom, Universe, ProofStep, prove, forward_deduce};
+use engine::{Axiom, Universe, ProofStep, prove_checked, forward_deduce};
 use colored::Colorize;
 // ---------------------------------------------------------------------------
 // Session — named universes + active cursor
@@ -539,9 +539,10 @@ fn process_line(input: &str, session: &mut Session) {
         match parser.parse_formula() {
             Some(goal) => {
                 println!("{} {}  [universe: '{}']", "Goal:".blue().bold(), goal.to_string().cyan(), session.active.yellow());
-                match prove(&goal, session.current(), 20) {
-                    Some(proof) => explain_proof(&proof),
-                    None        => println!("{}", "No proof found.".red().bold()),
+                match prove_checked(&goal, session.current(), 20) {
+                    Ok(Some(proof)) => explain_proof(&proof),
+                    Ok(None) => println!("{}", "No proof found.".red().bold()),
+                    Err(error) => println!("{}", format!("Type error: {}", error).red()),
                 }
             }
             None => println!("Could not parse goal."),
