@@ -1344,14 +1344,13 @@ This section records the implementation that now exists, rather than the longer-
 **Still required for a genuinely small trusted kernel**
 
 - Strengthen existential witness checking, including sort correctness and capture avoidance.
-- Strengthen existential witness checking, including sort correctness and capture avoidance.
 - Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
 - Add first-class universal quantification and its introduction/elimination rules.
 - Distinguish theorem declarations from axioms and require every theorem to pass kernel verification.
 
 ## Next architectural priorities
 
-1. Finish the kernel trust boundary: exact goal preservation, checked rewriting, and complete validation of explicit substitutions.
+1. Finish the kernel trust boundary: exact goal preservation, checked rewriting, and stronger validation of existential witness data.
 2. Introduce first-class universal quantification and robust variable identity/capture-avoiding substitution.
 3. Separate verified theorem declarations from axioms and assumptions.
 4. Continue with the named-universe dependency graph after theorem provenance and verification are reliable.
@@ -1368,3 +1367,12 @@ The existing search engine remains a proof-discovery component. It is not part o
 - Extended typed axiom proof nodes to carry explicit variable instantiations. The kernel checks that every supplied key is declared by the referenced axiom, applies the substitution to the conclusion and every premise, and rejects mismatches.
 - The search engine records the resolved instantiation at the point where all premises have succeeded; the proof object no longer asks the kernel to invent one by unifying the conclusion with the goal.
 - This remains an incremental proof-object design: existential witness sort/capture validation and explicit equality-rewrite derivations are still outstanding.
+
+**Explicit axiom instantiations — implemented (first stage)**
+
+- Extended `ProofRule::Axiom` with a substitution map keyed by the axiom's declared variable names.
+- Proof search captures each declared variable's resolved term after all premises have succeeded, then stores that data in the proof node.
+- `ProofStep::apply_bindings` also resolves terms stored inside axiom proof data.
+- The kernel no longer derives an axiom substitution by unifying the conclusion with the claimed goal. It applies the supplied substitution to the axiom conclusion and every premise, checks the conclusion exactly, and rejects substitution keys not declared by the axiom.
+- Added adversarial tests for undeclared substitution keys and mismatched premises, plus an end-to-end test that checks proof search records an instantiation accepted by the kernel.
+- The maintainer should run `cargo test` before this change is merged.
