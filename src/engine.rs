@@ -664,8 +664,8 @@ fn simplify_term_inner(
 /// from user-introduced variables and prevents them from accidentally
 /// shadowing axiom variable names.
 ///
-/// The counter is passed by mutable reference so it survives across IDDFS
-/// depth iterations within a single `prove()` call.  This guarantees that
+/// The shared counter survives across IDDFS depth iterations within a
+/// single `prove()` call. This guarantees that
 /// Skolem names are unique within one top-level proof attempt.
 fn fresh_skolem(counter: &Cell<u32>) -> String {
     let next = counter.get() + 1;
