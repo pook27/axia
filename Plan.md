@@ -1191,8 +1191,8 @@ These are the first changes I would actually make:
 
 |**Sprint 1**|Recommended starting point|
 |---|---|
-|7 / 9 completed|78%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
+|8 / 9 completed|89%|
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**- [x] Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
 
 
 
@@ -1315,13 +1315,13 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Criterion showed proof-search improvements of 9.1%, 29.4% and 35.0% at chain sizes 8, 32 and 128 respectively.
 
 
-**Capture-avoiding substitution and quantifier alpha-equivalence — implementation in review**
+**Capture-avoiding substitution and quantifier alpha-equivalence — done**
 
 - Substitution now removes a locally bound variable from the active environment and alpha-renames the binder whenever a replacement would otherwise be captured.
 - Bound-occurrence renaming respects nested shadowing.
 - Existential formulas now unify modulo binder names, while requiring matching sorts.
 - Added regression tests for capture prevention, shadowing and alpha-equivalent quantified formulas.
-- Awaiting maintainer validation; this item remains unchecked until the test suite passes.
+- The maintainer ran `cargo fmt --check` and `cargo test` successfully; this Sprint 1 objective is complete.
 
 
 ---
