@@ -336,36 +336,144 @@ impl Term {
     }
 }
 
+// Helpers for name-based alpha-renaming. These keep the current AST compatible
+// while ensuring that a binder never captures a variable introduced by a
+// substitution. A future VarId migration can replace this machinery.
+fn term_contains_variable(term: &Term, name: &str) -> bool {
+    match term {
+        Term::Var(variable, _) => variable == name,
+        Term::Const(_) => false,
+        Term::Apply(_, args) => args.iter().any(|arg| term_contains_variable(arg, name)),
+    }
+}
+
+fn formula_contains_variable(formula: &Formula, name: &str) -> bool {
+    match formula {
+        Formula::Eq(left, right) =>
+            term_contains_variable(left, name) || term_contains_variable(right, name),
+        Formula::Pred(_, args) => args.iter().any(|arg| term_contains_variable(arg, name)),
+        Formula::And(left, right)
+        | Formula::Or(left, right)
+        | Formula::Implies(left, right) =>
+            formula_contains_variable(left, name) || formula_contains_variable(right, name),
+        Formula::Not(inner) => formula_contains_variable(inner, name),
+        Formula::Exists { var, body, .. } =>
+            var == name || formula_contains_variable(body, name),
+    }
+}
+
+fn rename_bound_term(term: &Term, old: &str, new: &str) -> Term {
+    match term {
+        Term::Var(name, sort) if name == old => Term::Var(new.to_string(), sort.clone()),
+        Term::Var(_, _) | Term::Const(_) => term.clone(),
+        Term::Apply(name, args) => Term::Apply(
+            name.clone(),
+            args.iter().map(|arg| rename_bound_term(arg, old, new)).collect(),
+        ),
+    }
+}
+
+/// Rename occurrences bound by the surrounding quantifier. A nested
+/// quantifier using the same name shadows it, so its body is left untouched.
+fn rename_bound_occurrences(formula: &Formula, old: &str, new: &str) -> Formula {
+    match formula {
+        Formula::Eq(left, right) => Formula::Eq(
+            rename_bound_term(left, old, new),
+            rename_bound_term(right, old, new),
+        ),
+        Formula::Pred(name, args) => Formula::Pred(
+            name.clone(),
+            args.iter().map(|arg| rename_bound_term(arg, old, new)).collect(),
+        ),
+        Formula::And(left, right) => Formula::And(
+            Box::new(rename_bound_occurrences(left, old, new)),
+            Box::new(rename_bound_occurrences(right, old, new)),
+        ),
+        Formula::Or(left, right) => Formula::Or(
+            Box::new(rename_bound_occurrences(left, old, new)),
+            Box::new(rename_bound_occurrences(right, old, new)),
+        ),
+        Formula::Not(inner) => Formula::Not(Box::new(rename_bound_occurrences(inner, old, new))),
+        Formula::Implies(left, right) => Formula::Implies(
+            Box::new(rename_bound_occurrences(left, old, new)),
+            Box::new(rename_bound_occurrences(right, old, new)),
+        ),
+        Formula::Exists { var, .. } if var == old => formula.clone(),
+        Formula::Exists { var, sort, body } => Formula::Exists {
+            var: var.clone(),
+            sort: sort.clone(),
+            body: Box::new(rename_bound_occurrences(body, old, new)),
+        },
+    }
+}
+
+fn fresh_alpha_name(base: &str, formulas: &[&Formula], bindings: &Bindings) -> String {
+    let mut suffix = 0usize;
+    loop {
+        let candidate = format!("{base}__alpha{suffix}");
+        let used_in_formula = formulas
+            .iter()
+            .any(|formula| formula_contains_variable(formula, &candidate));
+        let used_in_bindings = bindings.contains_key(&candidate)
+            || bindings.values().any(|term| term_contains_variable(term, &candidate));
+        if !used_in_formula && !used_in_bindings {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
 impl Formula {
+    /// Apply a capture-avoiding substitution.
+    ///
+    /// Bound variables are first removed from the active substitution. If any
+    /// remaining substitution value contains the binder's name, the binder is
+    /// alpha-renamed before substitution is applied to its body.
     pub fn substitute(&self, bindings: &Bindings) -> Formula {
         match self {
-            Formula::Eq(l, r)        => Formula::Eq(l.substitute(bindings), r.substitute(bindings)),
-            Formula::Pred(n, args)   => Formula::Pred(
-                n.clone(),
-                args.iter().map(|a| a.substitute(bindings)).collect(),
+            Formula::Eq(left, right) =>
+                Formula::Eq(left.substitute(bindings), right.substitute(bindings)),
+            Formula::Pred(name, args) => Formula::Pred(
+                name.clone(),
+                args.iter().map(|arg| arg.substitute(bindings)).collect(),
             ),
-            Formula::And(l, r)       => Formula::And(
-                Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
-                Formula::Or(l, r)        => Formula::Or(
-                    Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
-                Formula::Not(i)          => Formula::Not(Box::new(i.substitute(bindings))),
-                Formula::Implies(l, r)   => Formula::Implies(
-                    Box::new(l.substitute(bindings)), Box::new(r.substitute(bindings))),
+            Formula::And(left, right) => Formula::And(
+                Box::new(left.substitute(bindings)),
+                Box::new(right.substitute(bindings)),
+            ),
+            Formula::Or(left, right) => Formula::Or(
+                Box::new(left.substitute(bindings)),
+                Box::new(right.substitute(bindings)),
+            ),
+            Formula::Not(inner) => Formula::Not(Box::new(inner.substitute(bindings))),
+            Formula::Implies(left, right) => Formula::Implies(
+                Box::new(left.substitute(bindings)),
+                Box::new(right.substitute(bindings)),
+            ),
+            Formula::Exists { var, sort, body } => {
+                let mut inner_bindings = bindings.clone();
+                inner_bindings.remove(var);
 
-                    // Substitution respects the binder: if the bound variable is
-                    // shadowed by a binding we skip it inside the body, just as in
-                    // capture-avoiding substitution.  In practice our Skolem names
-                    // (`?wN`) are globally unique so shadowing cannot occur, but we
-                    // implement it correctly anyway.
-                    Formula::Exists { var, sort, body } => {
-                        let mut inner_bindings = bindings.clone();
-                        inner_bindings.remove(var); // the bound var is local
-                        Formula::Exists {
-                            var:  var.clone(),
-                            sort: sort.clone(),
-                            body: Box::new(body.substitute(&inner_bindings)),
-                        }
+                let would_capture = inner_bindings
+                    .values()
+                    .any(|term| term_contains_variable(term, var));
+
+                if would_capture {
+                    let fresh = fresh_alpha_name(var, &[body], &inner_bindings);
+                    let renamed_body = rename_bound_occurrences(body, var, &fresh);
+                    Formula::Exists {
+                        var: fresh,
+                        sort: sort.clone(),
+                        body: Box::new(renamed_body.substitute(&inner_bindings)),
                     }
+                } else {
+                    Formula::Exists {
+                        var: var.clone(),
+                        sort: sort.clone(),
+                        body: Box::new(body.substitute(&inner_bindings)),
+                    }
+                }
+            }
         }
     }
 }
@@ -465,7 +573,19 @@ fn unify_formulas_inner(left: &Formula, right: &Formula, subst: &mut Substitutio
         (
             Formula::Exists { var: v1, sort: s1, body: b1 },
             Formula::Exists { var: v2, sort: s2, body: b2 },
-        ) => v1 == v2 && s1 == s2 && unify_formulas_inner(b1, b2, subst),
+        ) => {
+            if s1 != s2 {
+                false
+            } else {
+                // Compare quantified formulas modulo binder names. Pick a name
+                // absent from both bodies so renaming cannot capture free vars.
+                let empty_bindings = Bindings::new();
+                let fresh = fresh_alpha_name(v1, &[b1, b2], &empty_bindings);
+                let left = rename_bound_occurrences(b1, v1, &fresh);
+                let right = rename_bound_occurrences(b2, v2, &fresh);
+                unify_formulas_inner(&left, &right, subst)
+            }
+        },
         _ => false,
     }
 }
@@ -2041,6 +2161,62 @@ mod trail_structural_search_tests {
 
         assert_eq!(proof.witnesses, vec![("x".into(), constant("a"))]);
         assert_eq!(proof.sub_proofs[0].goal, pred("P", constant("a")));
+    }
+
+    #[test]
+    fn substitution_renames_a_binder_to_prevent_variable_capture() {
+        let formula = Formula::Exists {
+            var: "y".into(),
+            sort: Sort::object(),
+            body: Box::new(Formula::Pred(
+                "R".into(),
+                vec![var("x"), var("y")],
+            )),
+        };
+        let bindings = Bindings::from([("x".into(), var("y"))]);
+
+        let result = formula.substitute(&bindings);
+        let Formula::Exists { var: binder, body, .. } = result else {
+            panic!("substitution must preserve the existential");
+        };
+        assert_ne!(binder, "y");
+        assert_eq!(
+            *body,
+            Formula::Pred("R".into(), vec![var("y"), var(&binder)])
+        );
+    }
+
+    #[test]
+    fn substitution_respects_a_shadowing_quantifier() {
+        let formula = Formula::Exists {
+            var: "x".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("P", var("x"))),
+        };
+        let bindings = Bindings::from([("x".into(), constant("a"))]);
+
+        assert_eq!(formula.substitute(&bindings), formula);
+    }
+
+    #[test]
+    fn quantified_formula_unification_is_alpha_equivalent() {
+        let left = Formula::Exists {
+            var: "x".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("P", var("x"))),
+        };
+        let right = Formula::Exists {
+            var: "y".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("P", var("y"))),
+        };
+
+        assert!(left.unify(&right).is_some());
+        assert!(left.unify(&Formula::Exists {
+            var: "y".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("Q", var("y"))),
+        }).is_none());
     }
 
     #[test]
