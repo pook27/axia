@@ -161,7 +161,7 @@ fn check_node(
                 ));
             }
         }
-        ProofRule::Axiom(axiom_name) => {
+        ProofRule::Axiom(axiom_name, instantiations) => {
             let Some(axiom) = universe.axioms.iter().find(|a| a.name == *axiom_name) else {
                 return Err(fail(
                     format!("unknown axiom proof rule '{}'", axiom_name),
@@ -174,15 +174,22 @@ fn check_node(
                     path,
                 ));
             }
-            let Some(bindings) = axiom.conclusion.unify(&proof.goal) else {
+            if instantiations.keys().any(|name| !axiom.vars.contains(name)) {
+                return Err(fail(
+                    format!("axiom '{}' has an instantiation for an undeclared variable", axiom.name),
+                    path,
+                ));
+            }
+            let instantiated_conclusion = axiom.conclusion.substitute(instantiations);
+            if instantiated_conclusion != proof.goal {
                 return Err(fail(
                     format!(
-                        "axiom '{}' conclusion does not match {}",
-                        axiom.name, proof.goal
+                        "axiom '{}' instantiated conclusion is {}, not {}",
+                        axiom.name, instantiated_conclusion, proof.goal
                     ),
                     path,
                 ));
-            };
+            }
             if axiom.premises.len() != proof.sub_proofs.len() {
                 return Err(fail(
                     format!(
@@ -197,7 +204,7 @@ fn check_node(
             for (index, (premise, child)) in
                 axiom.premises.iter().zip(&proof.sub_proofs).enumerate()
             {
-                let expected = premise.substitute(&bindings);
+                let expected = premise.substitute(instantiations);
                 if child.goal != expected {
                     return Err(fail(
                         format!(
@@ -304,7 +311,7 @@ mod tests {
         universe.add_given("p".into(), pred("P"));
         let proof = ProofStep {
             goal: pred("Q"),
-            rule: ProofRule::Axiom("P_to_Q".into()),
+            rule: ProofRule::Axiom("P_to_Q".into(), HashMap::new()),
             sub_proofs: vec![leaf(pred("P"), ProofRule::Given("p".into()))],
             witnesses: vec![],
         };
@@ -318,7 +325,7 @@ mod tests {
     fn rejects_unknown_axioms_and_false_reflexivity() {
         let universe = Universe::new();
         assert!(check_proof(
-            &leaf(pred("P"), ProofRule::Axiom("TrustMe".into())),
+            &leaf(pred("P"), ProofRule::Axiom("TrustMe".into(), HashMap::new())),
             &universe,
         )
         .is_err());
