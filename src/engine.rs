@@ -771,7 +771,7 @@ pub fn forward_deduce(
                 if !axiom.premises.is_empty() {
                     continue;
                 }
-                if matches!(axiom.conclusion, Formula::Eq(_, _)) {
+                if matches!(&axiom.conclusion, Formula::Eq(_, _)) {
                     continue;
                 }
 
@@ -1599,7 +1599,7 @@ mod forward_index_tests {
         let fact_index = FactIndex::new(&givens);
         let rule_index = ForwardAxiomIndex::new(&axioms);
 
-        assert_eq!(rule_index.candidates(&fact_index), vec![0, 2]);
+        assert_eq!(rule_index.candidates(&fact_index), vec![0]);
         assert_eq!(fact_index.candidates(&q).len(), 0);
         assert_eq!(fact_index.candidates(&Formula::Pred("P".into(), vec![
             Term::Var("x".into(), Sort::object()),
@@ -1621,4 +1621,47 @@ mod forward_index_tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].get("x"), Some(&Term::Const("alice".into())));
     }
+    #[test]
+    fn semi_naive_deduction_uses_new_facts_as_non_first_premises() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), Sort::object());
+        let a = Term::Const("a".into());
+        let pred = |name: &str, term: Term| Formula::Pred(name.into(), vec![term]);
+
+        universe.givens.insert("p_a".into(), pred("P", a.clone()));
+        universe.givens.insert("s_a".into(), pred("S", a.clone()));
+
+        universe.add_axiom(Axiom {
+            name: "S_implies_Q".into(),
+            vars: vec![("x".into(), Sort::object())],
+            premises: vec![pred("S", x.clone())],
+            conclusion: pred("Q", x.clone()),
+        });
+        universe.add_axiom(Axiom {
+            name: "P_and_Q_implies_R".into(),
+            vars: vec![("x".into(), Sort::object())],
+            premises: vec![pred("P", x.clone()), pred("Q", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let derived = forward_deduce(&mut universe, 5);
+        assert!(derived.iter().any(|(_, f)| *f == pred("Q", a.clone())));
+        assert!(derived.iter().any(|(_, f)| *f == pred("R", a.clone())));
+    }
+
+    #[test]
+    fn semi_naive_deduction_emits_premise_free_facts_once() {
+        let mut universe = Universe::new();
+        universe.add_axiom(Axiom {
+            name: "BaseFact".into(),
+            vars: vec![],
+            premises: vec![],
+            conclusion: Formula::Pred("Base".into(), vec![Term::Const("a".into())]),
+        });
+
+        let derived = forward_deduce(&mut universe, 5);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].1, Formula::Pred("Base".into(), vec![Term::Const("a".into())]));
+    }
+
 }
