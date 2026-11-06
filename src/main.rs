@@ -338,9 +338,9 @@ fn print_help() {
     println!("  import <name>                       Pull axioms from another universe into active");
     println!("  load <file>                         Load a .axia file into active universe");
     println!("  load <file> into <universe>         Load a file into a specific universe");
-    println!("  assert <formula>                    Add a ground fact to active universe");
-    println!("  Given <Name> : <formula>            Declare a named hypothesis");
-    println!("  deduce <n>                          Forward-chain for <n> saturation steps");
+    println!("  assert <formula>                    Add a trusted assumption to active universe");
+    println!("  Given <Name> : <formula>            Declare a named trusted assumption");
+    println!("  deduce <n>                          Derive facts without changing assumptions");
     println!("  prove <formula>                     Prove a formula in active universe");
     println!("  exit                                Quit");
     println!();
@@ -490,12 +490,20 @@ fn process_line(input: &str, session: &mut Session) {
                 println!("    [{}] {} ⊢ {}", ax.name, prems.join(", "), ax.conclusion);
             }
         }
-        if !u.givens.is_empty() {
-            println!("  Givens / Deductions ({}):", u.givens.len());
-            let mut pairs: Vec<(&String, &Formula)> = u.givens.iter().collect();
+        if !u.assumptions.is_empty() {
+            println!("  Trusted assumptions ({}):", u.assumptions.len());
+            let mut pairs: Vec<(&String, &Formula)> = u.assumptions.iter().collect();
             pairs.sort_by_key(|(n, _)| n.as_str());
-            for (gname, gf) in pairs {
-                println!("    [{}] {}", gname, gf);
+            for (name, formula) in pairs {
+                println!("    [{}] {}", name, formula);
+            }
+        }
+        if !u.derived.is_empty() {
+            println!("  Derived facts ({}):", u.derived.len());
+            let mut pairs: Vec<(&String, &Formula)> = u.derived.iter().collect();
+            pairs.sort_by_key(|(n, _)| n.as_str());
+            for (name, formula) in pairs {
+                println!("    [{}] {}", name, formula);
             }
         }
         return;
@@ -565,13 +573,17 @@ fn process_line(input: &str, session: &mut Session) {
         let mut parser = Parser::with_universe(tokens, Some(session.current()));
         match parser.parse_formula_complete() {
             Ok(f) => {
-                session.current_mut().add_axiom(Axiom {
-                    name:       "Fact".to_string(),
-                    vars:       vec![],
-                    premises:   vec![],
-                    conclusion: f,
-                });
-                println!("Fact added to universe '{}'.", session.active);
+                let universe = session.current_mut();
+                let mut index = universe.assumptions.len() + 1;
+                let name = loop {
+                    let candidate = format!("Asserted_{}", index);
+                    if !universe.assumptions.contains_key(&candidate) {
+                        break candidate;
+                    }
+                    index += 1;
+                };
+                universe.add_given(name.clone(), f);
+                println!("Trusted assumption '{}' added to universe '{}'.", name, session.active);
             }
             Err(e) => println!("{}", format!("Could not parse fact: {}", e).red()),
         }
