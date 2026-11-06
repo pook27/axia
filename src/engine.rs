@@ -1966,6 +1966,22 @@ mod trail_backtracking_tests {
 }
 
 
+#[cfg(test)]
+mod trail_structural_search_tests {
+    use super::*;
+
+    fn var(name: &str) -> Term {
+        Term::Var(name.into(), Sort::object())
+    }
+
+    fn constant(name: &str) -> Term {
+        Term::Const(name.into())
+    }
+
+    fn pred(name: &str, term: Term) -> Formula {
+        Formula::Pred(name.into(), vec![term])
+    }
+
     #[test]
     fn existential_instantiation_preserves_the_resolved_witness() {
         let mut universe = Universe::new();
@@ -1996,3 +2012,4 @@ mod trail_backtracking_tests {
         assert_eq!(proof.rule_name, "Disjunction_Right");
         assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
     }
+}
