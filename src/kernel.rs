@@ -161,7 +161,7 @@ fn check_node(
                 ));
             }
         }
-        ProofRule::Axiom(axiom_name) => {
+        ProofRule::Axiom(axiom_name, instantiations) => {
             let Some(axiom) = universe.axioms.iter().find(|a| a.name == *axiom_name) else {
                 return Err(fail(
                     format!("unknown axiom proof rule '{}'", axiom_name),
@@ -174,15 +174,22 @@ fn check_node(
                     path,
                 ));
             }
-            let Some(bindings) = axiom.conclusion.unify(&proof.goal) else {
+            if instantiations.keys().any(|name| !axiom.vars.contains(name)) {
+                return Err(fail(
+                    format!("axiom '{}' has an instantiation for an undeclared variable", axiom.name),
+                    path,
+                ));
+            }
+            let instantiated_conclusion = axiom.conclusion.substitute(instantiations);
+            if instantiated_conclusion != proof.goal {
                 return Err(fail(
                     format!(
-                        "axiom '{}' conclusion does not match {}",
-                        axiom.name, proof.goal
+                        "axiom '{}' instantiated conclusion is {}, not {}",
+                        axiom.name, instantiated_conclusion, proof.goal
                     ),
                     path,
                 ));
-            };
+            }
             if axiom.premises.len() != proof.sub_proofs.len() {
                 return Err(fail(
                     format!(
@@ -197,7 +204,7 @@ fn check_node(
             for (index, (premise, child)) in
                 axiom.premises.iter().zip(&proof.sub_proofs).enumerate()
             {
-                let expected = premise.substitute(&bindings);
+                let expected = premise.substitute(instantiations);
                 if child.goal != expected {
                     return Err(fail(
                         format!(
@@ -304,7 +311,7 @@ mod tests {
         universe.add_given("p".into(), pred("P"));
         let proof = ProofStep {
             goal: pred("Q"),
-            rule: ProofRule::Axiom("P_to_Q".into()),
+            rule: ProofRule::Axiom("P_to_Q".into(), HashMap::new()),
             sub_proofs: vec![leaf(pred("P"), ProofRule::Given("p".into()))],
             witnesses: vec![],
         };
@@ -314,11 +321,93 @@ mod tests {
         assert!(check_proof(&forged, &universe).is_err());
     }
 
+
+    #[test]
+    fn checks_explicit_axiom_instantiations_against_conclusion_and_premises() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), crate::ast::Sort::object());
+        let alice = Term::Const("alice".into());
+        let p_x = Formula::Pred("P".into(), vec![x.clone()]);
+        let q_x = Formula::Pred("Q".into(), vec![x]);
+        universe.add_axiom(Axiom {
+            name: "P_to_Q".into(),
+            vars: vec!["x".into()],
+            premises: vec![p_x],
+            conclusion: q_x.clone(),
+        });
+
+        let instantiation = HashMap::from([("x".into(), alice.clone())]);
+        let proof = ProofStep {
+            goal: Formula::Pred("Q".into(), vec![alice.clone()]),
+            rule: ProofRule::Axiom("P_to_Q".into(), instantiation.clone()),
+            sub_proofs: vec![leaf(
+                Formula::Pred("P".into(), vec![alice.clone()]),
+                ProofRule::Given("p_alice".into()),
+            )],
+            witnesses: vec![],
+        };
+        universe.add_given(
+            "p_alice".into(),
+            Formula::Pred("P".into(), vec![alice.clone()]),
+        );
+        check_proof(&proof, &universe).unwrap();
+
+        let undeclared = ProofStep {
+            rule: ProofRule::Axiom(
+                "P_to_Q".into(),
+                HashMap::from([
+                    ("x".into(), alice.clone()),
+                    ("rogue".into(), alice.clone()),
+                ]),
+            ),
+            ..proof.clone()
+        };
+        assert!(check_proof(&undeclared, &universe).is_err());
+
+        let wrong_premise = ProofStep {
+            sub_proofs: vec![leaf(
+                Formula::Pred("P".into(), vec![Term::Const("bob".into())]),
+                ProofRule::Given("p_alice".into()),
+            )],
+            ..proof
+        };
+        assert!(check_proof(&wrong_premise, &universe).is_err());
+    }
+
+    #[test]
+    fn proof_search_records_the_axiom_instantiation_for_the_kernel() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), crate::ast::Sort::object());
+        let alice = Term::Const("alice".into());
+        universe.add_axiom(Axiom {
+            name: "P_to_Q".into(),
+            vars: vec!["x".into()],
+            premises: vec![Formula::Pred("P".into(), vec![x.clone()])],
+            conclusion: Formula::Pred("Q".into(), vec![x]),
+        });
+        universe.add_given(
+            "p_alice".into(),
+            Formula::Pred("P".into(), vec![alice.clone()]),
+        );
+        let goal = Formula::Pred("Q".into(), vec![alice.clone()]);
+        let proof = crate::engine::prove(&goal, &universe, 8)
+            .expect("the axiom should prove Q(alice)");
+
+        match &proof.rule {
+            ProofRule::Axiom(name, instantiations) => {
+                assert_eq!(name, "P_to_Q");
+                assert_eq!(instantiations.get("x"), Some(&alice));
+            }
+            other => panic!("expected an axiom proof, got {other:?}"),
+        }
+        check_proof_for_goal(&proof, &goal, &universe).unwrap();
+    }
+
     #[test]
     fn rejects_unknown_axioms_and_false_reflexivity() {
         let universe = Universe::new();
         assert!(check_proof(
-            &leaf(pred("P"), ProofRule::Axiom("TrustMe".into())),
+            &leaf(pred("P"), ProofRule::Axiom("TrustMe".into(), HashMap::new())),
             &universe,
         )
         .is_err());

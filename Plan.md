@@ -1343,7 +1343,6 @@ This section records the implementation that now exists, rather than the longer-
 
 **Still required for a genuinely small trusted kernel**
 
-- Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
 - Strengthen existential witness checking, including sort correctness and capture avoidance.
 - Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
 - Add first-class universal quantification and its introduction/elimination rules.
@@ -1351,7 +1350,7 @@ This section records the implementation that now exists, rather than the longer-
 
 ## Next architectural priorities
 
-1. Finish the kernel trust boundary: typed proof objects, exact goal preservation, explicit substitutions and checked rewriting.
+1. Finish the kernel trust boundary: exact goal preservation, checked rewriting, and stronger validation of existential witness data.
 2. Introduce first-class universal quantification and robust variable identity/capture-avoiding substitution.
 3. Separate verified theorem declarations from axioms and assumptions.
 4. Continue with the named-universe dependency graph after theorem provenance and verification are reliable.
@@ -1359,10 +1358,21 @@ This section records the implementation that now exists, rather than the longer-
 The existing search engine remains a proof-discovery component. It is not part of the trusted kernel, and passing the current tests does not yet establish that Axia has a complete formal proof assistant kernel.
 
 
-## Typed proof-rule migration — in progress
+## Typed proof-rule migration — done
 
 - Introduced a `ProofRule` enum for equality reflexivity, named givens, named axioms, conjunction/disjunction introduction, and existential introduction.
 - Migrated proof search to construct these variants directly rather than encoding rule identity in strings.
 - Migrated the kernel checker to match on typed constructors. Every `ProofRule` variant is handled explicitly; the checker no longer parses display strings.
 - Kept human-readable labels at the presentation boundary for the REPL formatter.
-- This is the first typed-proof-object step, not the final proof-object design: substitutions and axiom instantiations are still implicit and must become explicit kernel-checked data.
+- Extended typed axiom proof nodes to carry explicit variable instantiations. The kernel checks that every supplied key is declared by the referenced axiom, applies the substitution to the conclusion and every premise, and rejects mismatches.
+- The search engine records the resolved instantiation at the point where all premises have succeeded; the proof object no longer asks the kernel to invent one by unifying the conclusion with the goal.
+- This remains an incremental proof-object design: existential witness sort/capture validation and explicit equality-rewrite derivations are still outstanding.
+
+**Explicit axiom instantiations — implemented (first stage)**
+
+- Extended `ProofRule::Axiom` with a substitution map keyed by the axiom's declared variable names.
+- Proof search captures each declared variable's resolved term after all premises have succeeded, then stores that data in the proof node.
+- `ProofStep::apply_bindings` also resolves terms stored inside axiom proof data.
+- The kernel no longer derives an axiom substitution by unifying the conclusion with the claimed goal. It applies the supplied substitution to the axiom conclusion and every premise, checks the conclusion exactly, and rejects substitution keys not declared by the axiom.
+- Added adversarial tests for undeclared substitution keys and mismatched premises, plus an end-to-end test that checks proof search records an instantiation accepted by the kernel.
+- The maintainer should run `cargo test` before this change is merged.

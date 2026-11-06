@@ -14,7 +14,7 @@ pub type Bindings = HashMap<String, Term>;
 pub enum ProofRule {
     EqualityReflexivity,
     Given(String),
-    Axiom(String),
+    Axiom(String, Bindings),
     ConjunctionIntroduction,
     DisjunctionIntroductionLeft,
     DisjunctionIntroductionRight,
@@ -26,7 +26,7 @@ impl ProofRule {
         match self {
             Self::EqualityReflexivity => "Eq_Refl",
             Self::Given(name) => name,
-            Self::Axiom(name) => name,
+            Self::Axiom(name, _) => name,
             Self::ConjunctionIntroduction => "Conjunction",
             Self::DisjunctionIntroductionLeft => "Disjunction_Left",
             Self::DisjunctionIntroductionRight => "Disjunction_Right",
@@ -65,6 +65,11 @@ impl ProofStep {
         self.goal = self.goal.substitute(bindings);
         for witness in &mut self.witnesses {
             witness.1 = witness.1.substitute(bindings);
+        }
+        if let ProofRule::Axiom(_, instantiations) = &mut self.rule {
+            for term in instantiations.values_mut() {
+                *term = term.substitute(bindings);
+            }
         }
         for sub in &mut self.sub_proofs {
             sub.apply_bindings(bindings);
@@ -1397,7 +1402,8 @@ fn prove_dfs(
                         axiom_ctr,
                         operations_budget,
                         &current_goal,
-                        &ProofRule::Axiom(fresh_axiom.name.clone()),
+                        &fresh_axiom.name,
+                        &axiom.vars.iter().cloned().zip(fresh_axiom.vars.iter().cloned()).collect::<Vec<_>>(),
                         Vec::new(),
                         continuation,
                     );
@@ -1429,14 +1435,25 @@ fn prove_axiom_premises(
     axiom_ctr: &Cell<usize>,
     operations_budget: &Cell<usize>,
     root_goal: &Formula,
-    rule: &ProofRule,
+    axiom_name: &str,
+    axiom_vars: &[(String, String)],
     sub_proofs: Vec<ProofStep>,
     continuation: &mut ProofContinuation<'_>,
 ) -> bool {
     if position == premises.len() {
+        let instantiations = axiom_vars
+            .iter()
+            .filter_map(|(original, fresh)| {
+                subst.get(fresh).map(|term| (original.clone(), subst.resolve(term)))
+            })
+            .collect();
         return continuation(
             subst,
-            ProofStep::simple(root_goal.clone(), rule.clone(), sub_proofs),
+            ProofStep::simple(
+                root_goal.clone(),
+                ProofRule::Axiom(axiom_name.to_string(), instantiations),
+                sub_proofs,
+            ),
         );
     }
 
@@ -1472,7 +1489,8 @@ fn prove_axiom_premises(
                 axiom_ctr,
                 operations_budget,
                 root_goal,
-                rule,
+                axiom_name,
+                axiom_vars,
                 next_proofs,
                 continuation,
             )
