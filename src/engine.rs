@@ -1268,7 +1268,7 @@ fn prove_dfs(
                 subst,
                 ProofStep::simple(
                     current_goal.clone(),
-                    format!("Given {}", given_name),
+                    ProofRule::Given(given_name.to_string()),
                     vec![],
                 ),
             );
