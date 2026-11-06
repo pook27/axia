@@ -120,7 +120,7 @@ fn check_node(
                     path,
                 ));
             };
-            let expected = match proof.rule {
+            let expected = match &proof.rule {
                 ProofRule::DisjunctionIntroductionLeft => &**left,
                 ProofRule::DisjunctionIntroductionRight => &**right,
                 _ => unreachable!("the match arm restricts the rule variants"),
