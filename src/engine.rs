@@ -8,28 +8,50 @@ pub type Bindings = HashMap<String, Term>;
 // Proof tree
 // ---------------------------------------------------------------------------
 
+/// The logical rule used at a proof-tree node. Display labels are deliberately
+/// kept separate from the constructors consumed by the trusted checker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProofRule {
+    EqualityReflexivity,
+    Given(String),
+    Axiom(String),
+    ConjunctionIntroduction,
+    DisjunctionIntroductionLeft,
+    DisjunctionIntroductionRight,
+    ExistentialIntroduction,
+}
+
+impl ProofRule {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::EqualityReflexivity => ProofRule::EqualityReflexivity,
+            Self::Given(name) => name,
+            Self::Axiom(name) => name,
+            Self::ConjunctionIntroduction => ProofRule::ConjunctionIntroduction,
+            Self::DisjunctionIntroductionLeft => ProofRule::DisjunctionIntroductionLeft,
+            Self::DisjunctionIntroductionRight => ProofRule::DisjunctionIntroductionRight,
+            Self::ExistentialIntroduction => "Existential_Instantiation",
+        }
+    }
+}
+
 /// One node in a successful proof tree.
-///
-/// The `witnesses` field is populated when this node was proved via
-/// Existential Instantiation.  Each entry is `(original_var_name, resolved_term)`
-/// — for example `("C", Apply("IntersectAt", [Var("l1"), Var("l2")]))`.
-/// The formatter uses this to emit "Construct C as IntersectAt(l1, l2)."
 #[derive(Debug, Clone)]
 pub struct ProofStep {
     /// The formula that was proved at this node, with all bindings applied.
-    pub goal:       Formula,
-    /// Human-readable name of the rule / axiom used.
-    pub rule_name:  String,
+    pub goal: Formula,
+    /// Typed logical constructor; never infer semantics from a display string.
+    pub rule: ProofRule,
     /// Sub-goals that had to be proved to discharge this goal.
     pub sub_proofs: Vec<ProofStep>,
     /// Existential witnesses introduced at this step (may be empty).
-    pub witnesses:  Vec<(String, Term)>,
+    pub witnesses: Vec<(String, Term)>,
 }
 
 impl ProofStep {
     /// Convenience constructor for steps with no witnesses.
-    fn simple(goal: Formula, rule_name: impl Into<String>, sub_proofs: Vec<ProofStep>) -> Self {
-        ProofStep { goal, rule_name: rule_name.into(), sub_proofs, witnesses: vec![] }
+    fn simple(goal: Formula, rule: ProofRule, sub_proofs: Vec<ProofStep>) -> Self {
+        ProofStep { goal, rule, sub_proofs, witnesses: vec![] }
     }
 
     /// Recursively apply `bindings` to every goal formula and every witness
@@ -1120,7 +1142,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
             let simped_right = simplify_term(right, &universe.axioms);
             if simped_left == simped_right {
                 let refl_goal = Formula::Eq(simped_left.clone(), simped_right.clone());
-                return Some(ProofStep::simple(refl_goal, "Eq_Refl", vec![]));
+                return Some(ProofStep::simple(refl_goal, ProofRule::EqualityReflexivity, vec![]));
             }
             Formula::Eq(simped_left, simped_right)
         }
@@ -1141,7 +1163,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
             if given_formula.unify_into(&goal, &mut subst) {
                 return Some(ProofStep::simple(
                     goal.clone(),
-                    format!("Given {}", given_name),
+                    ProofRule::Given(given_name.to_string()),
                     vec![],
                 ));
             }
@@ -1231,7 +1253,7 @@ fn prove_dfs(
         if left == right {
             return continuation(
                 subst,
-                ProofStep::simple(current_goal, "Eq_Refl", vec![]),
+                ProofStep::simple(current_goal, ProofRule::EqualityReflexivity, vec![]),
             );
         }
     }
@@ -1281,7 +1303,7 @@ fn prove_dfs(
                                 subst,
                                 ProofStep::simple(
                                     current_goal.clone(),
-                                    "Conjunction",
+                                    ProofRule::ConjunctionIntroduction,
                                     vec![left_proof.clone(), right_proof],
                                 ),
                             )
@@ -1299,7 +1321,7 @@ fn prove_dfs(
                         subst,
                         ProofStep::simple(
                             current_goal.clone(),
-                            "Disjunction_Left",
+                            ProofRule::DisjunctionIntroductionLeft,
                             vec![proof],
                         ),
                     )
@@ -1316,7 +1338,7 @@ fn prove_dfs(
                             subst,
                             ProofStep::simple(
                                 current_goal.clone(),
-                                "Disjunction_Right",
+                                ProofRule::DisjunctionIntroductionRight,
                                 vec![proof],
                             ),
                         )
@@ -1339,7 +1361,7 @@ fn prove_dfs(
                     let concrete_goal = witness_goal.substitute(subst.as_bindings());
                     let mut step = ProofStep {
                         goal: current_goal.clone(),
-                        rule_name: "Existential_Instantiation".to_string(),
+                        rule_name: ProofRule::ExistentialIntroduction,
                         sub_proofs: vec![sub_proof],
                         witnesses: vec![(var.clone(), resolved_witness)],
                     };
@@ -1375,7 +1397,7 @@ fn prove_dfs(
                         axiom_ctr,
                         operations_budget,
                         &current_goal,
-                        &fresh_axiom.name,
+                        &ProofRule::Axiom(fresh_axiom.name.clone()),
                         Vec::new(),
                         continuation,
                     );
@@ -1407,14 +1429,14 @@ fn prove_axiom_premises(
     axiom_ctr: &Cell<usize>,
     operations_budget: &Cell<usize>,
     root_goal: &Formula,
-    rule_name: &str,
+    rule: &ProofRule,
     sub_proofs: Vec<ProofStep>,
     continuation: &mut ProofContinuation<'_>,
 ) -> bool {
     if position == premises.len() {
         return continuation(
             subst,
-            ProofStep::simple(root_goal.clone(), rule_name, sub_proofs),
+            ProofStep::simple(root_goal.clone(), rule.clone(), sub_proofs),
         );
     }
 
@@ -2014,7 +2036,7 @@ mod trail_structural_search_tests {
         );
         let proof = prove(&goal, &universe, 1).expect("the right disjunct should be provable");
 
-        assert_eq!(proof.rule_name, "Disjunction_Right");
+        assert_eq!(proof.rule_name, ProofRule::DisjunctionIntroductionRight);
         assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
     }
 }
