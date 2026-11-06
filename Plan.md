@@ -1272,3 +1272,11 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Indexed forward rules by their first premise head and facts by formula head.
 - Added regression tests proving that irrelevant formula constructors, predicate names and arities are filtered without changing unification bindings.
 - The project maintainer ran the test suite successfully.
+
+
+**Criterion benchmark suite — implementation awaiting validation**
+
+- Added `benches/engine.rs` with separate proof-search and forward-deduction benchmarks at chain sizes 8, 32 and 128.
+- Each workload includes unrelated facts and rules to exercise formula-head indexing rather than measuring only a trivial linear chain.
+- Workload construction is outside the timed routine via Criterion's batched iteration.
+- Run with `cargo bench --bench engine`; compare results across sizes before drawing performance conclusions.
