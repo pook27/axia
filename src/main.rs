@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::collections::HashMap;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use parser::{lex, Parser};
+use parser::{lex_checked, Parser};
 use ast::{Statement, Formula, Sort};
 use engine::{Axiom, Universe, ProofStep, prove_checked, forward_deduce};
 use colored::Colorize;
@@ -534,10 +534,13 @@ fn process_line(input: &str, session: &mut Session) {
     // -----------------------------------------------------------------------
 
     if let Some(goal_str) = trimmed.strip_prefix("prove ") {
-        let tokens = lex(goal_str.trim());
+        let tokens = match lex_checked(goal_str.trim()) {
+            Ok(tokens) => tokens,
+            Err(e) => { println!("{}", format!("Could not parse goal: {}", e).red()); return; }
+        };
         let mut parser = Parser::with_universe(tokens, Some(session.current()));
-        match parser.parse_formula() {
-            Some(goal) => {
+        match parser.parse_formula_complete() {
+            Ok(goal) => {
                 println!("{} {}  [universe: '{}']", "Goal:".blue().bold(), goal.to_string().cyan(), session.active.yellow());
                 match prove_checked(&goal, session.current(), 20) {
                     Ok(Some(proof)) => explain_proof(&proof),
@@ -545,7 +548,7 @@ fn process_line(input: &str, session: &mut Session) {
                     Err(error) => println!("{}", format!("Type error: {}", error).red()),
                 }
             }
-            None => println!("Could not parse goal."),
+            Err(e) => println!("{}", format!("Could not parse goal: {}", e).red()),
         }
         return;
     }
@@ -555,10 +558,13 @@ fn process_line(input: &str, session: &mut Session) {
     // -----------------------------------------------------------------------
 
     if let Some(fact_str) = trimmed.strip_prefix("assert ") {
-        let tokens = lex(fact_str.trim());
+        let tokens = match lex_checked(fact_str.trim()) {
+            Ok(tokens) => tokens,
+            Err(e) => { println!("{}", format!("Could not parse fact: {}", e).red()); return; }
+        };
         let mut parser = Parser::with_universe(tokens, Some(session.current()));
-        match parser.parse_formula() {
-            Some(f) => {
+        match parser.parse_formula_complete() {
+            Ok(f) => {
                 session.current_mut().add_axiom(Axiom {
                     name:       "Fact".to_string(),
                     vars:       vec![],
@@ -567,7 +573,7 @@ fn process_line(input: &str, session: &mut Session) {
                 });
                 println!("Fact added to universe '{}'.", session.active);
             }
-            None => println!("Could not parse fact."),
+            Err(e) => println!("{}", format!("Could not parse fact: {}", e).red()),
         }
         return;
     }
@@ -615,9 +621,16 @@ fn process_line(input: &str, session: &mut Session) {
     // Bare declaration (TypeDecl / ConstDecl / PredDecl / AxiomDecl / Import)
     // -----------------------------------------------------------------------
 
-    let tokens = lex(trimmed);
+    let tokens = match lex_checked(trimmed) {
+        Ok(tokens) => tokens,
+        Err(e) => { println!("{}", format!("Parse error: {} ({})", trimmed, e).red()); return; }
+    };
     let mut parser = Parser::with_universe(tokens, Some(session.current()));
-    match parser.parse_statement() {
+    let parsed = match parser.parse_statement_complete() {
+        Ok(statement) => Some(statement),
+        Err(e) => { println!("{}", format!("Parse error: {} ({})", trimmed, e).red()); return; }
+    };
+    match parsed {
         Some(Statement::TypeDecl(n)) => {
             session.current_mut().add_type(n.clone());
             println!("{} {}", "Defined Type:".yellow(), n.cyan().bold());

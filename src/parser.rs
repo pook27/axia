@@ -15,7 +15,25 @@ pub enum Token {
     Keyword(String),
 }
 
+/// Lenient lexer: characters that are not part of the language are skipped.
+/// Prefer [`lex_checked`] for user-supplied input.
+#[allow(dead_code)]
 pub fn lex(input: &str) -> Vec<Token> {
+    lex_inner(input, &mut Vec::new())
+}
+
+/// Strict lexer: fails on any character that is not part of the language,
+/// instead of silently dropping it.
+pub fn lex_checked(input: &str) -> Result<Vec<Token>, String> {
+    let mut unknown = Vec::new();
+    let tokens = lex_inner(input, &mut unknown);
+    match unknown.first() {
+        Some(c) => Err(format!("unexpected character '{}'", c)),
+        None => Ok(tokens),
+    }
+}
+
+fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
 
@@ -59,7 +77,7 @@ pub fn lex(input: &str) -> Vec<Token> {
                 }
             }
 
-            _ => { chars.next(); }
+            _ => { unknown.push(c); chars.next(); }
         }
     }
     tokens
@@ -136,21 +154,54 @@ impl<'a> Parser<'a> {
         self.peek_sym("∃") || self.peek_kw("exists")
     }
 
-    /// Consume a sort identifier.  Returns `Sort::object()` on failure.
-    fn parse_sort(&mut self) -> Sort {
+    /// Consume a sort identifier.  Returns `None` if the next token is not a sort.
+    fn parse_sort(&mut self) -> Option<Sort> {
         match self.tokens.peek() {
             Some(Token::Keyword(k)) if k == "Type" || k == "Prop" => {
                 let k = k.clone();
                 self.tokens.next();
-                Sort(k)
+                Some(Sort(k))
             }
-            Some(Token::Ident(n)) => {
+            // Numeric literals lex as identifiers but are never valid sort names.
+            Some(Token::Ident(n)) if !n.starts_with(|c: char| c.is_ascii_digit()) => {
                 let n = n.clone();
                 self.tokens.next();
-                Sort(n)
+                Some(Sort(n))
             }
-            _ => Sort::object(),
+            _ => None,
         }
+    }
+
+    /// True once every token has been consumed.
+    pub fn at_end(&mut self) -> bool {
+        self.tokens.peek().is_none()
+    }
+
+    fn describe_next(&mut self) -> String {
+        match self.tokens.peek() {
+            Some(Token::Ident(s)) | Some(Token::Symbol(s)) | Some(Token::Keyword(s)) => s.clone(),
+            None => "end of input".to_string(),
+        }
+    }
+
+    fn finish<T>(&mut self, parsed: Option<T>) -> Result<T, String> {
+        match parsed {
+            None => Err("incomplete or malformed input".to_string()),
+            Some(value) if self.at_end() => Ok(value),
+            Some(_) => Err(format!("unexpected trailing token '{}'", self.describe_next())),
+        }
+    }
+
+    /// Parse a whole formula, rejecting malformed input and leftover tokens.
+    pub fn parse_formula_complete(&mut self) -> Result<Formula, String> {
+        let parsed = self.parse_formula();
+        self.finish(parsed)
+    }
+
+    /// Parse a whole statement, rejecting malformed input and leftover tokens.
+    pub fn parse_statement_complete(&mut self) -> Result<Statement, String> {
+        let parsed = self.parse_statement();
+        self.finish(parsed)
     }
 
     // ------------------------------------------------------------------
@@ -231,7 +282,7 @@ impl<'a> Parser<'a> {
 
         let sort = if self.peek_sym(":") {
             self.tokens.next();
-            self.parse_sort()
+            self.parse_sort()?
         } else {
             Sort::object()
         };
@@ -361,7 +412,7 @@ impl<'a> Parser<'a> {
         if self.peek_sym("(") {
             self.tokens.next();
             let t = self.parse_term()?;
-            self.consume_sym(")");
+            if !self.consume_sym(")") { return None; }
             return Some(t);
         }
 
@@ -374,12 +425,14 @@ impl<'a> Parser<'a> {
         if self.peek_sym("(") {
             self.tokens.next();
             let mut args = Vec::new();
-            while let Some(arg) = self.parse_term() {
-                args.push(arg);
-                if self.peek_sym(",") { self.tokens.next(); continue; }
-                break;
+            if !self.peek_sym(")") {
+                loop {
+                    args.push(self.parse_term()?);
+                    if self.consume_sym(",") { continue; }
+                    break;
+                }
             }
-            self.consume_sym(")");
+            if !self.consume_sym(")") { return None; }
             return Some(Term::Apply(name, args));
         }
 
@@ -453,7 +506,7 @@ impl<'a> Parser<'a> {
         if let Some(Token::Ident(_)) = self.tokens.peek() {
             let mut sorts: Vec<Sort> = Vec::new();
             loop {
-                let s = self.parse_sort();
+                let s = self.parse_sort()?;
                 sorts.push(s);
                 if self.peek_sym("→") { self.tokens.next(); continue; }
                 break;
@@ -470,8 +523,8 @@ impl<'a> Parser<'a> {
             return Some(Statement::ConstDecl(name, sole));
         }
 
-        while self.tokens.next().is_some() {}
-        Some(Statement::PredDecl(name, vec![], Sort::object()))
+        // `Name :` followed by anything else is malformed.
+        None
     }
 
     /// Parse `forall v1 v2 ... : Sort, <formula>`.
@@ -485,9 +538,10 @@ impl<'a> Parser<'a> {
             self.tokens.next();
         }
 
-        self.consume_sym(":");
-        let sort = self.parse_sort();
-        self.consume_sym(",");
+        if var_names.is_empty() { return None; }
+        if !self.consume_sym(":") { return None; }
+        let sort = self.parse_sort()?;
+        if !self.consume_sym(",") { return None; }
 
         // Temporarily introduce the quantified variables into parser scope.
         // Preserve previous values in case a variable shadows an outer one.
