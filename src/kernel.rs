@@ -5,7 +5,7 @@
 //! the active logical context. A successful search result is only a candidate
 //! until it passes this checker.
 
-use crate::ast::{Formula, Term};
+use crate::ast::Formula;
 use crate::engine::{ProofRule, ProofStep, Universe};
 use std::collections::HashMap;
 
@@ -120,10 +120,10 @@ fn check_node(
                     path,
                 ));
             };
-            let expected = match &proof.rule {
-                ProofRule::DisjunctionIntroductionLeft => &**left,
-                ProofRule::DisjunctionIntroductionRight => &**right,
-                _ => unreachable!("the match arm restricts the rule variants"),
+            let expected = if matches!(&proof.rule, ProofRule::DisjunctionIntroductionLeft) {
+                &**left
+            } else {
+                &**right
             };
             if proof.sub_proofs.len() != 1
                 || !proof.witnesses.is_empty()
@@ -226,6 +226,7 @@ fn check_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Term;
     use crate::engine::{Axiom, ProofRule, ProofStep};
 
     fn pred(name: &str) -> Formula {
