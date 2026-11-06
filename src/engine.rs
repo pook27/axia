@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use crate::ast::{Term, Formula, Sort};
 
@@ -666,9 +667,10 @@ fn simplify_term_inner(
 /// The counter is passed by mutable reference so it survives across IDDFS
 /// depth iterations within a single `prove()` call.  This guarantees that
 /// Skolem names are unique within one top-level proof attempt.
-fn fresh_skolem(counter: &mut u32) -> String {
-    *counter += 1;
-    format!("?w{}", *counter)
+fn fresh_skolem(counter: &Cell<u32>) -> String {
+    let next = counter.get() + 1;
+    counter.set(next);
+    format!("?w{}", next)
 }
 
 // ---------------------------------------------------------------------------
@@ -1146,9 +1148,9 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
         }
     }
 
-    let mut skolem_counter = 0u32;
-    let mut axiom_counter = 0usize;
-    let mut operations_budget: usize = 500_000;
+    let skolem_counter = Cell::new(0u32);
+    let axiom_counter = Cell::new(0usize);
+    let operations_budget = Cell::new(500_000usize);
 
     for depth in 1..=max_depth {
         let mut subst = Substitution::new();
@@ -1162,9 +1164,9 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
             depth,
             &mut subst,
             &[],
-            &mut skolem_counter,
-            &mut axiom_counter,
-            &mut operations_budget,
+            &skolem_counter,
+            &axiom_counter,
+            &operations_budget,
             &mut |subst, proof| {
                 // This is the only full binding-map snapshot in a successful
                 // search. All intermediate alternatives share the undo trail.
@@ -1177,7 +1179,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
             proof.apply_bindings(&final_bindings);
             return Some(proof);
         }
-        if operations_budget == 0 {
+        if operations_budget.get() == 0 {
             break;
         }
     }
@@ -1208,15 +1210,15 @@ fn prove_dfs(
     depth: u32,
     subst: &mut Substitution,
     path: &[Formula],
-    skolem_ctr: &mut u32,
-    axiom_ctr: &mut usize,
-    operations_budget: &mut usize,
+    skolem_ctr: &Cell<u32>,
+    axiom_ctr: &Cell<usize>,
+    operations_budget: &Cell<usize>,
     continuation: &mut ProofContinuation<'_>,
 ) -> bool {
-    if depth == 0 || *operations_budget == 0 {
+    if depth == 0 || operations_budget.get() == 0 {
         return false;
     }
-    *operations_budget -= 1;
+    operations_budget.set(operations_budget.get() - 1);
 
     let current_goal = goal.substitute(subst.as_bindings());
 
@@ -1345,13 +1347,13 @@ fn prove_dfs(
         }
         _ => {
             for &axiom_index in search_index.axiom_candidates(&current_goal) {
-                if *operations_budget == 0 {
+                if operations_budget.get() == 0 {
                     return false;
                 }
 
                 let axiom = &axioms[axiom_index];
-                *axiom_ctr += 1;
-                let fresh_axiom = instantiate_axiom(axiom, *axiom_ctr);
+                axiom_ctr.set(axiom_ctr.get() + 1);
+                let fresh_axiom = instantiate_axiom(axiom, axiom_ctr.get());
                 let checkpoint = subst.checkpoint();
 
                 if fresh_axiom.conclusion.unify_into(&current_goal, subst) {
@@ -1396,9 +1398,9 @@ fn prove_axiom_premises(
     depth: u32,
     subst: &mut Substitution,
     path: &[Formula],
-    skolem_ctr: &mut u32,
-    axiom_ctr: &mut usize,
-    operations_budget: &mut usize,
+    skolem_ctr: &Cell<u32>,
+    axiom_ctr: &Cell<usize>,
+    operations_budget: &Cell<usize>,
     root_goal: &Formula,
     rule_name: &str,
     sub_proofs: Vec<ProofStep>,
@@ -1411,7 +1413,7 @@ fn prove_axiom_premises(
         );
     }
 
-    if depth <= 1 || *operations_budget == 0 {
+    if depth <= 1 || operations_budget.get() == 0 {
         return false;
     }
 
