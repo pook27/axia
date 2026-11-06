@@ -1964,3 +1964,35 @@ mod trail_backtracking_tests {
         assert_eq!(proof.sub_proofs.len(), 2);
     }
 }
+
+
+    #[test]
+    fn existential_instantiation_preserves_the_resolved_witness() {
+        let mut universe = Universe::new();
+        universe.add_given("P_a".into(), pred("P", constant("a")));
+
+        let goal = Formula::Exists {
+            var: "x".into(),
+            sort: Sort::object(),
+            body: Box::new(pred("P", var("x"))),
+        };
+        let proof = prove(&goal, &universe, 2).expect("the existential should be provable");
+
+        assert_eq!(proof.witnesses, vec![("x".into(), constant("a"))]);
+        assert_eq!(proof.sub_proofs[0].goal, pred("P", constant("a")));
+    }
+
+    #[test]
+    fn disjunction_search_tries_the_right_branch_after_left_fails() {
+        let mut universe = Universe::new();
+        universe.add_given("Q_a".into(), pred("Q", constant("a")));
+
+        let goal = Formula::Or(
+            Box::new(pred("P", constant("a"))),
+            Box::new(pred("Q", constant("a"))),
+        );
+        let proof = prove(&goal, &universe, 1).expect("the right disjunct should be provable");
+
+        assert_eq!(proof.rule_name, "Disjunction_Right");
+        assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
+    }
