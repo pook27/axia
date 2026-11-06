@@ -1195,6 +1195,17 @@ These are the first changes I would actually make:
 
 
 
+### **Sprint 1 progress log**
+
+**Reject malformed input and trailing unparsed tokens — done**
+
+- `lex_checked` reports unknown characters instead of silently dropping them (`A & B` previously parsed as two formulas because `&` vanished). `lex` keeps its lenient behaviour.
+- `Parser::parse_formula_complete` and `parse_statement_complete` fail on leftover tokens and incomplete input. The REPL (`prove`, `assert`, bare statements) now uses them and prints the reason.
+- The parser rejects unbalanced parentheses, trailing or leading commas in argument lists, `Name :` followed by nothing valid, numeric sort names, and malformed `forall` headers. The catch-all that silently declared a predicate has been removed.
+- New tests in `tests/malformed_input.rs`. The bundled `lib/` files still load with no parse errors.
+
+**Observed while testing (not fixed, belongs to Phase 2):** deduction order in `lib/geometry/euclid.axia` varies between runs because of HashMap iteration. This matches the Phase 2 goal of deterministic proof generation.
+
 One thing I would explicitly avoid: rewriting the entire engine in one go. 
 
 Keep the current prover operational while introducing the new architecture alongside it. You can gradually move functionality across boundaries and compare the new implementation against the old one. 
