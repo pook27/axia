@@ -308,7 +308,7 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
                 goal_text,
                 "(by hypothesis".bright_black(),
                 format!("{})", hyp).bright_black());
-        } else if matches!(&step.rule, engine::ProofRule::Axiom(_)) && step.rule.label().starts_with("Fact") {
+        } else if matches!(&step.rule, engine::ProofRule::Axiom(..)) && step.rule.label().starts_with("Fact") {
             println!("{}{} {}", branch, goal_text, "(asserted fact)".bright_black());
         } else {
             println!("{}{} (via {})", branch, goal_text, rule_label);
