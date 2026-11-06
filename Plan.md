@@ -64,7 +64,7 @@ You already have:
 |Proof trees|Yes|
 |Named universes|Basic implementation|
 |Module loading|Basic implementation|
-|Verified proof kernel|Not yet|
+|Verified proof kernel|Initial proof-tree checker integrated; full kernel incomplete|
 |Theorem declarations<br>Universe dependency graph|Not yet a distinct proof-checked concept<br>Not yet|
 
 
@@ -1052,7 +1052,8 @@ Deliverable: an engine capable of handling substantially larger theories.
 
 Most important milestone 
 
-- Introduce formal proof objects. Implement a standalone proof checker. Introduce first-class universal quantification. Implement logical introduction and elimination rules. Separate theorem declarations from axioms. Require every theorem to pass kernel verification. 
+- **Partially implemented:** a standalone checker validates the current proof-tree format and is called by `prove_checked`.
+- **Still required:** replace display-oriented proof trees with formal typed proof objects; introduce first-class universal quantification and its introduction/elimination rules; separate theorem declarations from axioms; require every theorem to pass a complete kernel verification. 
 
 Deliverable: the first genuinely proof-checking Axia. 
 
@@ -1312,3 +1313,48 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - The successful top-level result takes one final binding snapshot; intermediate branches no longer clone and merge complete substitution maps.
 - Validated by the maintainer: all 30 library tests, 30 binary tests, 11 logical-operator integration tests and 8 malformed-input tests passed.
 - Criterion showed proof-search improvements of 9.1%, 29.4% and 35.0% at chain sizes 8, 32 and 128 respectively.
+
+
+---
+
+# Current implementation status — 2026-11-06
+
+This section records the implementation that now exists, rather than the longer-term target architecture described above.
+
+## Trusted kernel — initial boundary implemented
+
+**Standalone proof-tree checker — implemented**
+
+- Added `src/kernel.rs`, which checks candidate proof trees without invoking proof search.
+- The checker explicitly validates the currently supported proof steps: equality reflexivity, named assumptions/derived facts, conjunction introduction, disjunction introduction, existential witness instantiation, and named axiom applications.
+- It checks that axiom applications establish their conclusion and provide a proof for every premise.
+- Unknown rule names and malformed proof trees are rejected with a structured error containing the failing child path.
+- Integrated kernel checking into `prove_checked`; a search result is no longer returned as a checked proof until the checker accepts it.
+- Added positive and adversarial unit tests for assumptions, conjunctions, axiom premises, unknown rules and malformed reflexivity.
+- The maintainer reported that the full test suite passed after the initial checker integration.
+
+**Original-goal binding check — in progress**
+
+- The checked entry point must verify that the root of the candidate proof still establishes the exact proposition requested by the caller.
+- This is necessary because the search engine currently simplifies equality terms before constructing a reflexivity proof. Checking only the simplified proof tree could otherwise accept a proof of a different equality.
+- The current implementation adds `check_proof_for_goal`, which checks that the proof root unifies with the caller's original goal before recursively checking the tree.
+- A regression test rejects a valid reflexivity proof when it is offered for a different requested equality.
+- This is an initial guard, not a replacement for explicit proof steps for rewriting. Rewriting must eventually be represented in the proof object and checked from equality premises/rules.
+
+**Still required for a genuinely small trusted kernel**
+
+- Replace string-valued rule names with typed proof constructors.
+- Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
+- Strengthen existential witness checking, including sort correctness and capture avoidance.
+- Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
+- Add first-class universal quantification and its introduction/elimination rules.
+- Distinguish theorem declarations from axioms and require every theorem to pass kernel verification.
+
+## Next architectural priorities
+
+1. Finish the kernel trust boundary: typed proof objects, exact goal preservation, explicit substitutions and checked rewriting.
+2. Introduce first-class universal quantification and robust variable identity/capture-avoiding substitution.
+3. Separate verified theorem declarations from axioms and assumptions.
+4. Continue with the named-universe dependency graph after theorem provenance and verification are reliable.
+
+The existing search engine remains a proof-discovery component. It is not part of the trusted kernel, and passing the current tests does not yet establish that Axia has a complete formal proof assistant kernel.

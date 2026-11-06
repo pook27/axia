@@ -1194,7 +1194,7 @@ pub fn prove_checked(
     universe.validate_formula(goal)?;
     let candidate = prove(goal, universe, max_depth);
     if let Some(proof) = &candidate {
-        crate::kernel::check_proof(proof, universe)
+        crate::kernel::check_proof_for_goal(proof, goal, universe)
             .map_err(|error| format!("proof kernel rejected search result: {}", error))?;
     }
     Ok(candidate)
