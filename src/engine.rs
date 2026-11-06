@@ -1633,13 +1633,13 @@ mod forward_index_tests {
 
         universe.add_axiom(Axiom {
             name: "S_implies_Q".into(),
-            vars: vec![("x".into(), Sort::object())],
+            vars: vec!["x".into()],
             premises: vec![pred("S", x.clone())],
             conclusion: pred("Q", x.clone()),
         });
         universe.add_axiom(Axiom {
             name: "P_and_Q_implies_R".into(),
-            vars: vec![("x".into(), Sort::object())],
+            vars: vec!["x".into()],
             premises: vec![pred("P", x.clone()), pred("Q", x.clone())],
             conclusion: pred("R", x),
         });
