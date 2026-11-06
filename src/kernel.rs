@@ -5,7 +5,7 @@
 //! the active logical context. A successful search result is only a candidate
 //! until it passes this checker.
 
-use crate::ast::{Formula, Term};
+use crate::ast::Formula;
 use crate::engine::{ProofStep, Universe};
 use std::collections::HashMap;
 
@@ -39,6 +39,27 @@ impl std::error::Error for KernelError {}
 /// Unknown rule names are rejected rather than trusted.
 pub fn check_proof(proof: &ProofStep, universe: &Universe) -> Result<(), KernelError> {
     check_node(proof, universe, &mut Vec::new())
+}
+
+/// Check both the proof tree and that its root establishes the caller's
+/// original goal. This matters because search may normalize or instantiate
+/// goals before constructing a proof; those transformations must not silently
+/// change the proposition the caller asked to prove.
+pub fn check_proof_for_goal(
+    proof: &ProofStep,
+    requested_goal: &Formula,
+    universe: &Universe,
+) -> Result<(), KernelError> {
+    if proof.goal.unify(requested_goal).is_none() {
+        return Err(KernelError::at(
+            &[],
+            format!(
+                "proof establishes {}, not the requested goal {}",
+                proof.goal, requested_goal
+            ),
+        ));
+    }
+    check_proof(proof, universe)
 }
 
 fn check_node(
@@ -147,6 +168,7 @@ fn check_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Term;
     use crate::engine::{Axiom, ProofStep};
 
     fn pred(name: &str) -> Formula {
@@ -155,6 +177,23 @@ mod tests {
 
     fn leaf(goal: Formula, rule: &str) -> ProofStep {
         ProofStep { goal, rule_name: rule.into(), sub_proofs: vec![], witnesses: vec![] }
+    }
+
+
+    #[test]
+    fn rejects_a_valid_proof_of_a_different_goal() {
+        let universe = Universe::new();
+        let proof = leaf(
+            Formula::Eq(Term::Const("b".into()), Term::Const("b".into())),
+            "Eq_Refl",
+        );
+        let requested = Formula::Eq(
+            Term::Const("a".into()),
+            Term::Const("b".into()),
+        );
+
+        assert!(check_proof_for_goal(&proof, &requested, &universe).is_err());
+        check_proof_for_goal(&proof, &proof.goal, &universe).unwrap();
     }
 
     #[test]
