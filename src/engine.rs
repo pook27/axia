@@ -75,16 +75,12 @@ pub struct Universe {
     /// (`Term::Const`) during parsing so the engine cannot unify them
     /// with each other or with free variables.
     pub constants:  HashMap<String, Sort>,
-    /// Named hypotheses / deduced facts in this universe.
-    ///
-    /// Populated by:
-    ///   • `Given <Name> : <Formula>` declarations (user-supplied)
-    ///   • `forward_deduce` (engine-discovered consequences)
-    ///
-    /// The engine performs a direct O(|givens|) forward lookup against
-    /// these before initiating any backward-chaining DFS, and the forward
-    /// deduction loop iterates over them to derive new facts.
-    pub givens:     HashMap<String, Formula>,
+    /// Explicitly trusted assumptions supplied by the user or imported theory.
+    /// These are premises of the current logical context, not engine results.
+    pub assumptions: HashMap<String, Formula>,
+    /// Consequences discovered by forward deduction. Kept separate so callers
+    /// can inspect the trust boundary instead of treating derived facts as input.
+    pub derived: HashMap<String, Formula>,
 }
 
 impl Universe {
@@ -232,16 +228,31 @@ impl Universe {
         }
     }
 
+    /// Add a trusted, named assumption to this universe.
     pub fn add_given(&mut self, name: String, formula: Formula) {
-        self.givens.insert(name, formula);
+        self.assumptions.insert(name, formula);
+    }
+
+    /// Add a fact discovered by the reasoning engine.
+    pub fn add_derived(&mut self, name: String, formula: Formula) {
+        self.derived.insert(name, formula);
+    }
+
+    /// Return the complete fact view used by the reasoning engine.
+    /// The source maps remain separate; assumptions take precedence if a
+    /// caller has reused a name in both namespaces.
+    pub fn all_facts(&self) -> HashMap<String, Formula> {
+        let mut facts = self.derived.clone();
+        facts.extend(self.assumptions.clone());
+        facts
     }
 
     pub fn summary(&self) -> String {
         format!(
-            "{} axiom(s), {} type(s), {} predicate(s), {} constant(s), {} given(s)",
+            "{} axiom(s), {} type(s), {} predicate(s), {} constant(s), {} assumption(s), {} derived fact(s)",
             self.axioms.len(), self.types.len(),
             self.predicates.len(), self.constants.len(),
-            self.givens.len(),
+            self.assumptions.len(), self.derived.len(),
         )
     }
 }
@@ -749,8 +760,9 @@ pub fn forward_deduce(
 
     let axioms = universe.axioms.clone();
     let rule_index = ForwardAxiomIndex::new(&axioms);
-    let mut known: HashSet<Formula> = universe.givens.values().cloned().collect();
-    let mut delta = universe.givens.clone();
+    let mut facts = universe.all_facts();
+    let mut known: HashSet<Formula> = facts.values().cloned().collect();
+    let mut delta = facts.clone();
     let mut all_new = Vec::new();
     let mut deduction_counter = 0usize;
     let mut axiom_counter = 0usize;
@@ -761,7 +773,7 @@ pub fn forward_deduce(
         }
 
         let delta_index = FactIndex::new(&delta);
-        let known_index = FactIndex::new(&universe.givens);
+        let known_index = FactIndex::new(&facts);
         let mut new_this_step: Vec<(String, Formula)> = Vec::new();
 
         // Premise-free predicate axioms are facts in their own right. Process
@@ -804,7 +816,7 @@ pub fn forward_deduce(
                     let Some(delta_fact) = delta.get(delta_name) else { continue; };
                     let binding_sets = match_premises_forward_delta(
                         &fresh.premises,
-                        &universe.givens,
+                        &facts,
                         &known_index,
                         pivot_index,
                         delta_fact,
@@ -836,7 +848,8 @@ pub fn forward_deduce(
 
         let mut next_delta = HashMap::new();
         for (name, formula) in new_this_step {
-            universe.givens.insert(name.clone(), formula.clone());
+            universe.add_derived(name.clone(), formula.clone());
+            facts.insert(name.clone(), formula.clone());
             next_delta.insert(name.clone(), formula.clone());
             all_new.push((name, formula));
         }
@@ -1043,10 +1056,11 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     // goal unifies directly with a named Given or Deduction.  This is
     // O(|givens|) and fires before any depth-1 search node is expanded.
     // ------------------------------------------------------------------
-    let search_index = ProofSearchIndex::new(&universe.axioms, &universe.givens);
+    let facts = universe.all_facts();
+    let search_index = ProofSearchIndex::new(&universe.axioms, &facts);
 
     for given_name in search_index.given_candidates(goal) {
-        if let Some(given_formula) = universe.givens.get(given_name) {
+        if let Some(given_formula) = facts.get(given_name) {
             if let Some(_bindings) = given_formula.unify(goal) {
                 return Some(ProofStep::simple(
                         goal.clone(),
@@ -1065,7 +1079,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     // are attempted or how branchy the search tree becomes.
     let mut operations_budget: usize = 500_000;
     for depth in 1..=max_depth {
-        let proofs = prove_dfs(goal, &universe.axioms, &universe.givens, &search_index, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
+        let proofs = prove_dfs(goal, &universe.axioms, &facts, &search_index, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
         if let Some((mut proof, final_bindings)) = proofs.into_iter().next() {
             // Wash the entire proof tree with the final resolved bindings so
             // that Skolem variables (?wN) and alpha-renamed axiom variables
@@ -1624,8 +1638,8 @@ mod forward_index_tests {
         let a = Term::Const("a".into());
         let pred = |name: &str, term: Term| Formula::Pred(name.into(), vec![term]);
 
-        universe.givens.insert("p_a".into(), pred("P", a.clone()));
-        universe.givens.insert("s_a".into(), pred("S", a.clone()));
+        universe.add_given("p_a".into(), pred("P", a.clone()));
+        universe.add_given("s_a".into(), pred("S", a.clone()));
 
         universe.add_axiom(Axiom {
             name: "S_implies_Q".into(),
@@ -1660,4 +1674,49 @@ mod forward_index_tests {
         assert_eq!(derived[0].1, Formula::Pred("Base".into(), vec![Term::Const("a".into())]));
     }
 
+}
+
+
+#[cfg(test)]
+mod fact_provenance_tests {
+    use super::*;
+
+    fn pred(name: &str, term: &str) -> Formula {
+        Formula::Pred(name.into(), vec![Term::Const(term.into())])
+    }
+
+    #[test]
+    fn explicit_givens_are_stored_only_as_assumptions() {
+        let mut universe = Universe::new();
+        let assumption = pred("P", "a");
+
+        universe.add_given("P_a".into(), assumption.clone());
+
+        assert_eq!(universe.assumptions.get("P_a"), Some(&assumption));
+        assert!(universe.derived.is_empty());
+        assert_eq!(universe.all_facts().get("P_a"), Some(&assumption));
+    }
+
+    #[test]
+    fn forward_deduction_stores_results_separately_from_assumptions() {
+        let mut universe = Universe::new();
+        let assumption = pred("P", "a");
+        let conclusion = pred("Q", "a");
+
+        universe.add_given("P_a".into(), assumption.clone());
+        universe.add_axiom(Axiom {
+            name: "P_implies_Q".into(),
+            vars: vec![],
+            premises: vec![assumption.clone()],
+            conclusion: conclusion.clone(),
+        });
+
+        let discoveries = forward_deduce(&mut universe, 2);
+
+        assert!(discoveries.iter().any(|(_, formula)| formula == &conclusion));
+        assert_eq!(universe.assumptions.len(), 1);
+        assert_eq!(universe.assumptions.get("P_a"), Some(&assumption));
+        assert!(universe.derived.values().any(|formula| formula == &conclusion));
+        assert_eq!(universe.all_facts().len(), 2);
+    }
 }

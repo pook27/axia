@@ -1280,3 +1280,12 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Each workload includes unrelated facts and rules to exercise formula-head indexing rather than measuring only a trivial linear chain.
 - Workload construction is outside the timed routine via Criterion's batched iteration.
 - Run with `cargo bench --bench engine`; compare results across sizes before drawing performance conclusions.
+
+
+**Trusted assumptions vs. derived facts — implementation awaiting validation**
+
+- Split the universe fact store into `assumptions` (explicitly supplied by the user) and `derived` (facts produced by forward deduction).
+- Added `Universe::all_facts()` as the combined read-only reasoning view, preserving existing proof-search and deduction behavior while retaining provenance in storage.
+- Changed `assert` to add an assumption rather than manufacturing a premise-free axiom.
+- Updated `universe_info` and universe summaries to report trusted assumptions and derived facts separately.
+- Forward deduction now reads the combined fact view and writes discoveries only to the derived store.
