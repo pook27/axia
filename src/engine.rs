@@ -24,12 +24,12 @@ pub enum ProofRule {
 impl ProofRule {
     pub fn label(&self) -> &str {
         match self {
-            Self::EqualityReflexivity => ProofRule::EqualityReflexivity,
+            Self::EqualityReflexivity => "Eq_Refl",
             Self::Given(name) => name,
             Self::Axiom(name) => name,
-            Self::ConjunctionIntroduction => ProofRule::ConjunctionIntroduction,
-            Self::DisjunctionIntroductionLeft => ProofRule::DisjunctionIntroductionLeft,
-            Self::DisjunctionIntroductionRight => ProofRule::DisjunctionIntroductionRight,
+            Self::ConjunctionIntroduction => "Conjunction",
+            Self::DisjunctionIntroductionLeft => "Disjunction_Left",
+            Self::DisjunctionIntroductionRight => "Disjunction_Right",
             Self::ExistentialIntroduction => "Existential_Instantiation",
         }
     }
