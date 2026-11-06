@@ -64,7 +64,7 @@ You already have:
 |Proof trees|Yes|
 |Named universes|Basic implementation|
 |Module loading|Basic implementation|
-|Verified proof kernel|Not yet|
+|Verified proof kernel|Initial proof-tree checker integrated; full kernel incomplete|
 |Theorem declarations<br>Universe dependency graph|Not yet a distinct proof-checked concept<br>Not yet|
 
 
@@ -1052,7 +1052,8 @@ Deliverable: an engine capable of handling substantially larger theories.
 
 Most important milestone 
 
-- Introduce formal proof objects. Implement a standalone proof checker. Introduce first-class universal quantification. Implement logical introduction and elimination rules. Separate theorem declarations from axioms. Require every theorem to pass kernel verification. 
+- **Partially implemented:** a standalone checker validates the current proof-tree format and is called by `prove_checked`.
+- **Still required:** replace display-oriented proof trees with formal typed proof objects; introduce first-class universal quantification and its introduction/elimination rules; separate theorem declarations from axioms; require every theorem to pass a complete kernel verification. 
 
 Deliverable: the first genuinely proof-checking Axia. 
 
