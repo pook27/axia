@@ -1675,3 +1675,48 @@ mod forward_index_tests {
     }
 
 }
+
+
+#[cfg(test)]
+mod fact_provenance_tests {
+    use super::*;
+
+    fn pred(name: &str, term: &str) -> Formula {
+        Formula::Pred(name.into(), vec![Term::Const(term.into())])
+    }
+
+    #[test]
+    fn explicit_givens_are_stored_only_as_assumptions() {
+        let mut universe = Universe::new();
+        let assumption = pred("P", "a");
+
+        universe.add_given("P_a".into(), assumption.clone());
+
+        assert_eq!(universe.assumptions.get("P_a"), Some(&assumption));
+        assert!(universe.derived.is_empty());
+        assert_eq!(universe.all_facts().get("P_a"), Some(&assumption));
+    }
+
+    #[test]
+    fn forward_deduction_stores_results_separately_from_assumptions() {
+        let mut universe = Universe::new();
+        let assumption = pred("P", "a");
+        let conclusion = pred("Q", "a");
+
+        universe.add_given("P_a".into(), assumption.clone());
+        universe.add_axiom(Axiom {
+            name: "P_implies_Q".into(),
+            vars: vec![],
+            premises: vec![assumption.clone()],
+            conclusion: conclusion.clone(),
+        });
+
+        let discoveries = forward_deduce(&mut universe, 2);
+
+        assert!(discoveries.iter().any(|(_, formula)| formula == &conclusion));
+        assert_eq!(universe.assumptions.len(), 1);
+        assert_eq!(universe.assumptions.get("P_a"), Some(&assumption));
+        assert!(universe.derived.values().any(|formula| formula == &conclusion));
+        assert_eq!(universe.all_facts().len(), 2);
+    }
+}
