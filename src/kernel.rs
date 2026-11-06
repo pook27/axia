@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn checks_both_sides_of_conjunction() {
-        let universe = Universe::new();
+        let mut universe = Universe::new();
         let proof = ProofStep {
             goal: Formula::And(Box::new(pred("P")), Box::new(pred("Q"))),
             rule_name: "Conjunction".into(),
