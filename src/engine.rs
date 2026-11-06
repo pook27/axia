@@ -1192,7 +1192,12 @@ pub fn prove_checked(
     max_depth: u32,
 ) -> Result<Option<ProofStep>, String> {
     universe.validate_formula(goal)?;
-    Ok(prove(goal, universe, max_depth))
+    let candidate = prove(goal, universe, max_depth);
+    if let Some(proof) = &candidate {
+        crate::kernel::check_proof(proof, universe)
+            .map_err(|error| format!("proof kernel rejected search result: {}", error))?;
+    }
+    Ok(candidate)
 }
 
 /// Search one goal using a shared substitution trail.

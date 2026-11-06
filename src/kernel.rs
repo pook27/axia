@@ -1,0 +1,215 @@
+//! Independent checker for proof trees produced by the search engine.
+//!
+//! This module deliberately does not call proof search. It re-derives the
+//! obligation represented by each proof node and checks its children against
+//! the active logical context. A successful search result is only a candidate
+//! until it passes this checker.
+
+use crate::ast::{Formula, Term};
+use crate::engine::{ProofStep, Universe};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelError {
+    pub path: Vec<usize>,
+    pub message: String,
+}
+
+impl KernelError {
+    fn at(path: &[usize], message: impl Into<String>) -> Self {
+        Self { path: path.to_vec(), message: message.into() }
+    }
+}
+
+impl std::fmt::Display for KernelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.path.is_empty() {
+            write!(f, "{}", self.message)
+        } else {
+            write!(f, "proof node {:?}: {}", self.path, self.message)
+        }
+    }
+}
+
+impl std::error::Error for KernelError {}
+
+/// Check a candidate proof tree without invoking the search engine.
+///
+/// The checker accepts only rules whose meaning it implements explicitly.
+/// Unknown rule names are rejected rather than trusted.
+pub fn check_proof(proof: &ProofStep, universe: &Universe) -> Result<(), KernelError> {
+    check_node(proof, universe, &mut Vec::new())
+}
+
+fn check_node(
+    proof: &ProofStep,
+    universe: &Universe,
+    path: &mut Vec<usize>,
+) -> Result<(), KernelError> {
+    let fail = |message: String, path: &[usize]| KernelError::at(path, message);
+
+    if proof.rule_name == "Eq_Refl" {
+        match &proof.goal {
+            Formula::Eq(left, right) if left == right && proof.sub_proofs.is_empty()
+                && proof.witnesses.is_empty() => return Ok(()),
+            _ => return Err(fail("malformed equality-reflexivity proof".into(), path)),
+        }
+    }
+
+    if let Some(name) = proof.rule_name.strip_prefix("Given ") {
+        let facts = universe.all_facts();
+        let Some(fact) = facts.get(name) else {
+            return Err(fail(format!("unknown assumption or derived fact '{}'", name), path));
+        };
+        if !proof.sub_proofs.is_empty() || !proof.witnesses.is_empty()
+            || fact.unify(&proof.goal).is_none()
+        {
+            return Err(fail(format!("fact '{}' does not establish {}", name, proof.goal), path));
+        }
+        return Ok(());
+    }
+
+    match proof.rule_name.as_str() {
+        "Conjunction" => {
+            let Formula::And(left, right) = &proof.goal else {
+                return Err(fail("conjunction rule used for a non-conjunction goal".into(), path));
+            };
+            if proof.sub_proofs.len() != 2 || !proof.witnesses.is_empty()
+                || proof.sub_proofs[0].goal != **left
+                || proof.sub_proofs[1].goal != **right
+            {
+                return Err(fail("conjunction requires proofs of both conjuncts".into(), path));
+            }
+        }
+        "Disjunction_Left" | "Disjunction_Right" => {
+            let Formula::Or(left, right) = &proof.goal else {
+                return Err(fail("disjunction rule used for a non-disjunction goal".into(), path));
+            };
+            let expected = if proof.rule_name == "Disjunction_Left" { &**left } else { &**right };
+            if proof.sub_proofs.len() != 1 || !proof.witnesses.is_empty()
+                || proof.sub_proofs[0].goal != *expected
+            {
+                return Err(fail("disjunction proof must establish the selected branch".into(), path));
+            }
+        }
+        "Existential_Instantiation" => {
+            let Formula::Exists { var, body, .. } = &proof.goal else {
+                return Err(fail("existential rule used for a non-existential goal".into(), path));
+            };
+            if proof.sub_proofs.len() != 1 || proof.witnesses.len() != 1
+                || proof.witnesses[0].0 != *var
+            {
+                return Err(fail("existential proof requires one matching witness and one sub-proof".into(), path));
+            }
+            let bindings = HashMap::from([(var.clone(), proof.witnesses[0].1.clone())]);
+            let instantiated = body.substitute(&bindings);
+            if proof.sub_proofs[0].goal != instantiated {
+                return Err(fail("existential sub-proof does not match the supplied witness".into(), path));
+            }
+        }
+        rule_name => {
+            let Some(axiom) = universe.axioms.iter().find(|axiom| axiom.name == rule_name) else {
+                return Err(fail(format!("unsupported or unknown proof rule '{}'", rule_name), path));
+            };
+            if !proof.witnesses.is_empty() {
+                return Err(fail("axiom application cannot introduce existential witnesses".into(), path));
+            }
+            let Some(bindings) = axiom.conclusion.unify(&proof.goal) else {
+                return Err(fail(format!("axiom '{}' conclusion does not match {}", axiom.name, proof.goal), path));
+            };
+            if axiom.premises.len() != proof.sub_proofs.len() {
+                return Err(fail(format!(
+                    "axiom '{}' requires {} premise proof(s), found {}",
+                    axiom.name, axiom.premises.len(), proof.sub_proofs.len()
+                ), path));
+            }
+            for (index, (premise, child)) in axiom.premises.iter().zip(&proof.sub_proofs).enumerate() {
+                let expected = premise.substitute(&bindings);
+                if child.goal != expected {
+                    return Err(fail(format!(
+                        "premise {} of '{}' should be {}, not {}",
+                        index + 1, axiom.name, expected, child.goal
+                    ), path));
+                }
+            }
+        }
+    }
+
+    for (index, child) in proof.sub_proofs.iter().enumerate() {
+        path.push(index);
+        let result = check_node(child, universe, path);
+        path.pop();
+        result?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{Axiom, ProofStep};
+
+    fn pred(name: &str) -> Formula {
+        Formula::Pred(name.into(), vec![])
+    }
+
+    fn leaf(goal: Formula, rule: &str) -> ProofStep {
+        ProofStep { goal, rule_name: rule.into(), sub_proofs: vec![], witnesses: vec![] }
+    }
+
+    #[test]
+    fn accepts_a_named_assumption() {
+        let mut universe = Universe::new();
+        universe.add_given("P_fact".into(), pred("P"));
+        check_proof(&leaf(pred("P"), "Given P_fact"), &universe).unwrap();
+    }
+
+    #[test]
+    fn checks_both_sides_of_conjunction() {
+        let mut universe = Universe::new();
+        let proof = ProofStep {
+            goal: Formula::And(Box::new(pred("P")), Box::new(pred("Q"))),
+            rule_name: "Conjunction".into(),
+            sub_proofs: vec![leaf(pred("P"), "Given p"), leaf(pred("Q"), "Given q")],
+            witnesses: vec![],
+        };
+        universe.assumptions.insert("p".into(), pred("P"));
+        universe.assumptions.insert("q".into(), pred("Q"));
+        check_proof(&proof, &universe).unwrap();
+
+        let forged = ProofStep { sub_proofs: vec![leaf(pred("P"), "Given p"); 2], ..proof };
+        assert!(check_proof(&forged, &universe).is_err());
+    }
+
+    #[test]
+    fn checks_axiom_conclusion_and_every_premise() {
+        let mut universe = Universe::new();
+        universe.add_axiom(Axiom {
+            name: "P_to_Q".into(),
+            vars: vec![],
+            premises: vec![pred("P")],
+            conclusion: pred("Q"),
+        });
+        universe.add_given("p".into(), pred("P"));
+        let proof = ProofStep {
+            goal: pred("Q"),
+            rule_name: "P_to_Q".into(),
+            sub_proofs: vec![leaf(pred("P"), "Given p")],
+            witnesses: vec![],
+        };
+        check_proof(&proof, &universe).unwrap();
+
+        let forged = ProofStep { sub_proofs: vec![], ..proof };
+        assert!(check_proof(&forged, &universe).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_rules_and_false_reflexivity() {
+        let universe = Universe::new();
+        assert!(check_proof(&leaf(pred("P"), "TrustMe"), &universe).is_err());
+        assert!(check_proof(&leaf(
+            Formula::Eq(Term::Const("a".into()), Term::Const("b".into())),
+            "Eq_Refl",
+        ), &universe).is_err());
+    }
+}
