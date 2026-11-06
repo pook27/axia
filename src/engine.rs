@@ -1886,3 +1886,79 @@ mod rollback_substitution_tests {
     }
 }
 
+
+
+#[cfg(test)]
+mod trail_backtracking_tests {
+    use super::*;
+
+    fn var(name: &str) -> Term {
+        Term::Var(name.into(), Sort::object())
+    }
+
+    fn constant(name: &str) -> Term {
+        Term::Const(name.into())
+    }
+
+    fn pred(name: &str, term: Term) -> Formula {
+        Formula::Pred(name.into(), vec![term])
+    }
+
+    #[test]
+    fn conjunction_backtracks_into_earlier_goal_without_leaking_bindings() {
+        let mut universe = Universe::new();
+        let a = constant("a");
+        let b = constant("b");
+        let x = var("x");
+
+        // P(a) is deliberately tried before P(b). It binds x to a, but the
+        // second conjunct cannot be proved with that binding. Search must
+        // revisit the first conjunct and try P(b).
+        universe.add_given("P_a".into(), pred("P", a));
+        universe.add_given("P_b".into(), pred("P", b.clone()));
+        universe.add_given("T_b".into(), pred("T", b.clone()));
+        universe.add_axiom(Axiom {
+            name: "P_implies_R".into(),
+            vars: vec!["x".into()],
+            premises: vec![pred("P", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let goal = Formula::And(
+            Box::new(pred("R", var("x"))),
+            Box::new(pred("T", var("x"))),
+        );
+        let proof = prove(&goal, &universe, 3).expect("the conjunction should be provable");
+
+        let expected = Formula::And(
+            Box::new(pred("R", constant("b"))),
+            Box::new(pred("T", constant("b"))),
+        );
+        assert_eq!(proof.goal, expected);
+        assert_eq!(proof.sub_proofs.len(), 2);
+    }
+
+    #[test]
+    fn axiom_premises_share_bindings_across_the_entire_rule_application() {
+        let mut universe = Universe::new();
+        let a = constant("a");
+        let b = constant("b");
+        let x = var("x");
+
+        universe.add_given("P_a".into(), pred("P", a));
+        universe.add_given("P_b".into(), pred("P", b.clone()));
+        universe.add_given("S_b".into(), pred("S", b.clone()));
+        universe.add_axiom(Axiom {
+            name: "P_and_S_implies_R".into(),
+            vars: vec!["x".into()],
+            premises: vec![pred("P", x.clone()), pred("S", x.clone())],
+            conclusion: pred("R", x),
+        });
+
+        let proof = prove(&pred("R", var("result")), &universe, 3)
+            .expect("the rule should backtrack from a to b");
+
+        assert_eq!(proof.goal, pred("R", constant("b")));
+        assert_eq!(proof.sub_proofs.len(), 2);
+    }
+}
