@@ -1361,7 +1361,7 @@ fn prove_dfs(
                     let concrete_goal = witness_goal.substitute(subst.as_bindings());
                     let mut step = ProofStep {
                         goal: current_goal.clone(),
-                        rule_name: ProofRule::ExistentialIntroduction,
+                        rule: ProofRule::ExistentialIntroduction,
                         sub_proofs: vec![sub_proof],
                         witnesses: vec![(var.clone(), resolved_witness)],
                     };
@@ -2036,7 +2036,7 @@ mod trail_structural_search_tests {
         );
         let proof = prove(&goal, &universe, 1).expect("the right disjunct should be provable");
 
-        assert_eq!(proof.rule_name, ProofRule::DisjunctionIntroductionRight);
+        assert_eq!(proof.rule, ProofRule::DisjunctionIntroductionRight);
         assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
     }
 }
