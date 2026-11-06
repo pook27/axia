@@ -1065,11 +1065,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     // are attempted or how branchy the search tree becomes.
     let mut operations_budget: usize = 500_000;
     for depth in 1..=max_depth {
-        println!("  {}", format!("[Searching depth {}...]", depth));
         let proofs = prove_dfs(goal, &universe.axioms, &universe.givens, &search_index, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
-        if operations_budget == 0 {
-            println!("  {}", "[Search budget exhausted — aborting.]".to_string());
-        }
         if let Some((mut proof, final_bindings)) = proofs.into_iter().next() {
             // Wash the entire proof tree with the final resolved bindings so
             // that Skolem variables (?wN) and alpha-renamed axiom variables
