@@ -1190,8 +1190,8 @@ These are the first changes I would actually make:
 
 |**Sprint 1**|Recommended starting point|
 |---|---|
-|2 / 9 completed|22%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**Add termination protection to the simplifier**<br>Engine<br>**Reject malformed input and trailing unparsed tokens**<br>Parser<br>**Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
+|3 / 9 completed|33%|
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
 
 
 
