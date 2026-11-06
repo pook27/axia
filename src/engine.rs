@@ -660,6 +660,7 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
 fn match_premises_forward(
     premises: &[Formula],
     givens:   &HashMap<String, Formula>,
+    fact_index: &FactIndex,
     bindings: &Bindings,
 ) -> Vec<Bindings> {
     // Base case: all premises satisfied — the current binding set is valid.
@@ -676,7 +677,8 @@ fn match_premises_forward(
 
     let mut results = Vec::new();
 
-    for given_formula in givens.values() {
+    for given_name in fact_index.candidates(&premise_sub) {
+        let Some(given_formula) = givens.get(given_name) else { continue; };
         // Try to unify the (partially-substituted) premise with this given.
         // `unify` treats *both* sides as potentially containing variables,
         // which is correct here: the premise may still have free axiom
@@ -686,7 +688,7 @@ fn match_premises_forward(
             // have, then recurse on the remaining premises.
             let mut merged = bindings.clone();
             merged.extend(new_bindings);
-            results.extend(match_premises_forward(rest, givens, &merged));
+            results.extend(match_premises_forward(rest, givens, fact_index, &merged));
         }
     }
 
@@ -734,9 +736,15 @@ pub fn forward_deduce(
     // Accumulate all discoveries to return to the caller.
     let mut all_new: Vec<(String, Formula)> = Vec::new();
 
-    // A counter for alpha-renaming axioms.  Reused across steps and axioms
+    // A counter for alpha-renaming axioms. Reused across steps and axioms
     // so every instantiation gets a globally unique variable suffix.
     let mut axiom_ctr: usize = 0;
+
+    // Axiom conclusions/premises are immutable during saturation, so their
+    // index is built once. The fact index is rebuilt each round as discoveries
+    // extend the database.
+    let axioms_snap = universe.axioms.clone();
+    let forward_index = ForwardAxiomIndex::new(&axioms_snap);
 
     for _step in 0..max_steps {
         // Snapshot the set of known formula values at the start of this
@@ -746,11 +754,11 @@ pub fn forward_deduce(
 
         let mut new_this_step: Vec<(String, Formula)> = Vec::new();
 
-        // Clone the axiom list so we hold no borrow on `universe` while we
-        // also need `&mut universe.givens` below.
-        let axioms_snap = universe.axioms.clone();
+        let fact_index = FactIndex::new(&universe.givens);
+        let candidate_axioms = forward_index.candidates(&fact_index);
 
-        for axiom in &axioms_snap {
+        for axiom_index in candidate_axioms {
+            let axiom = &axioms_snap[axiom_index];
             // Skip zero-premise axioms that are unconditional equational
             // rewrite rules — they are already handled by `simp` and
             // re-deriving them as deductions would just flood the given set
@@ -772,6 +780,7 @@ pub fn forward_deduce(
             let binding_sets = match_premises_forward(
                 &fresh.premises,
                 &universe.givens,
+                &fact_index,
                 &HashMap::new(),
             );
 
@@ -842,6 +851,128 @@ fn term_has_free_vars(term: &Term, bindings: &Bindings) -> bool {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FormulaHead {
+    Predicate(String, usize),
+    Equality,
+    And,
+    Or,
+    Not,
+    Implies,
+    Exists,
+}
+
+fn formula_head(formula: &Formula) -> FormulaHead {
+    match formula {
+        Formula::Pred(name, args) => FormulaHead::Predicate(name.clone(), args.len()),
+        Formula::Eq(_, _) => FormulaHead::Equality,
+        Formula::And(_, _) => FormulaHead::And,
+        Formula::Or(_, _) => FormulaHead::Or,
+        Formula::Not(_) => FormulaHead::Not,
+        Formula::Implies(_, _) => FormulaHead::Implies,
+        Formula::Exists { .. } => FormulaHead::Exists,
+    }
+}
+
+/// Index for forward rules by the outer constructor of their first premise.
+#[derive(Debug, Default)]
+struct ForwardAxiomIndex {
+    by_first_premise: HashMap<FormulaHead, Vec<usize>>,
+    without_premises: Vec<usize>,
+}
+
+impl ForwardAxiomIndex {
+    fn new(axioms: &[Axiom]) -> Self {
+        let mut index = Self::default();
+        for (position, axiom) in axioms.iter().enumerate() {
+            if let Some(first) = axiom.premises.first() {
+                index.by_first_premise
+                    .entry(formula_head(first))
+                    .or_default()
+                    .push(position);
+            } else {
+                index.without_premises.push(position);
+            }
+        }
+        index
+    }
+
+    fn candidates(&self, facts: &FactIndex) -> Vec<usize> {
+        let mut candidates = self.without_premises.clone();
+        for (head, positions) in &self.by_first_premise {
+            if facts.contains_head(head) {
+                candidates.extend_from_slice(positions);
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+    }
+}
+
+/// Index named facts by formula head for forward-premise matching.
+#[derive(Debug, Default)]
+struct FactIndex {
+    by_head: HashMap<FormulaHead, Vec<String>>,
+}
+
+impl FactIndex {
+    fn new(givens: &HashMap<String, Formula>) -> Self {
+        let mut index = Self::default();
+        for (name, formula) in givens {
+            index.by_head.entry(formula_head(formula))
+                .or_default().push(name.clone());
+        }
+        index
+    }
+
+    fn contains_head(&self, head: &FormulaHead) -> bool {
+        self.by_head.contains_key(head)
+    }
+
+    fn candidates(&self, formula: &Formula) -> &[String] {
+        self.by_head.get(&formula_head(formula))
+            .map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// Per-proof indexes. They store positions/names, not cloned formulas.
+#[derive(Debug, Default)]
+struct ProofSearchIndex {
+    axioms_by_head: HashMap<FormulaHead, Vec<usize>>,
+    givens_by_head: HashMap<FormulaHead, Vec<String>>,
+}
+
+impl ProofSearchIndex {
+    fn new(axioms: &[Axiom], givens: &HashMap<String, Formula>) -> Self {
+        let mut index = Self::default();
+        for (position, axiom) in axioms.iter().enumerate() {
+            index.axioms_by_head
+                .entry(formula_head(&axiom.conclusion))
+                .or_default()
+                .push(position);
+        }
+        for (name, formula) in givens {
+            index.givens_by_head
+                .entry(formula_head(formula))
+                .or_default()
+                .push(name.clone());
+        }
+        index
+    }
+
+    fn axiom_candidates(&self, goal: &Formula) -> &[usize] {
+        self.axioms_by_head.get(&formula_head(goal))
+            .map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    fn given_candidates(&self, goal: &Formula) -> &[String] {
+        self.givens_by_head.get(&formula_head(goal))
+            .map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Proof search (IDDFS)
 // ---------------------------------------------------------------------------
@@ -887,13 +1018,17 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     // goal unifies directly with a named Given or Deduction.  This is
     // O(|givens|) and fires before any depth-1 search node is expanded.
     // ------------------------------------------------------------------
-    for (given_name, given_formula) in &universe.givens {
-        if let Some(_bindings) = given_formula.unify(goal) {
-            return Some(ProofStep::simple(
-                    goal.clone(),
-                    format!("Given {}", given_name),
-                    vec![],
-            ));
+    let search_index = ProofSearchIndex::new(&universe.axioms, &universe.givens);
+
+    for given_name in search_index.given_candidates(goal) {
+        if let Some(given_formula) = universe.givens.get(given_name) {
+            if let Some(_bindings) = given_formula.unify(goal) {
+                return Some(ProofStep::simple(
+                        goal.clone(),
+                        format!("Given {}", given_name),
+                        vec![],
+                ));
+            }
         }
     }
 
@@ -906,7 +1041,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
     let mut operations_budget: usize = 500_000;
     for depth in 1..=max_depth {
         println!("  {}", format!("[Searching depth {}...]", depth));
-        let proofs = prove_dfs(goal, &universe.axioms, &universe.givens, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
+        let proofs = prove_dfs(goal, &universe.axioms, &universe.givens, &search_index, depth, &HashMap::new(), &[], &mut skolem_counter, &mut axiom_counter, &mut operations_budget);
         if operations_budget == 0 {
             println!("  {}", "[Search budget exhausted — aborting.]".to_string());
         }
@@ -958,6 +1093,7 @@ fn prove_dfs(
     goal:       &Formula,
     axioms:     &[Axiom],
     givens:     &HashMap<String, Formula>,
+    search_index: &ProofSearchIndex,
     depth:      u32,
     bindings:   &Bindings,
     path:       &[Formula],
@@ -1005,14 +1141,16 @@ fn prove_dfs(
     // happens to match an established hypothesis.  The check is O(|givens|)
     // and short-circuits immediately on the first match, just like Eq_Refl.
     // ------------------------------------------------------------------
-    for (given_name, given_formula) in givens {
-        if let Some(new_bindings) = given_formula.unify(&current_goal) {
-            let mut merged = bindings.clone();
-            merged.extend(new_bindings);
-            return vec![(
-                ProofStep::simple(current_goal.clone(), format!("Given {}", given_name), vec![]),
-                merged,
-            )];
+    for given_name in search_index.given_candidates(&current_goal) {
+        if let Some(given_formula) = givens.get(given_name) {
+            if let Some(new_bindings) = given_formula.unify(&current_goal) {
+                let mut merged = bindings.clone();
+                merged.extend(new_bindings);
+                return vec![(
+                    ProofStep::simple(current_goal.clone(), format!("Given {}", given_name), vec![]),
+                    merged,
+                )];
+            }
         }
     }
 
@@ -1038,9 +1176,9 @@ fn prove_dfs(
     // ------------------------------------------------------------------
     if let Formula::And(left, right) = &current_goal {
         let mut path2 = path.to_vec(); path2.push(current_goal.clone());
-        for (p1, b1) in prove_dfs(left, axioms, givens, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
+        for (p1, b1) in prove_dfs(left, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
             let right_sub = right.substitute(&b1);
-            for (p2, b2) in prove_dfs(&right_sub, axioms, givens, depth, &b1, &path2, skolem_ctr, axiom_ctr, operations_budget) {
+            for (p2, b2) in prove_dfs(&right_sub, axioms, givens, search_index, depth, &b1, &path2, skolem_ctr, axiom_ctr, operations_budget) {
                 results.push((
                         ProofStep::simple(current_goal.clone(), "Conjunction", vec![p1.clone(), p2]),
                         b2,
@@ -1056,11 +1194,11 @@ fn prove_dfs(
     // ------------------------------------------------------------------
     if let Formula::Or(left, right) = &current_goal {
         let mut path2 = path.to_vec(); path2.push(current_goal.clone());
-        for (p, b) in prove_dfs(left, axioms, givens, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
+        for (p, b) in prove_dfs(left, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
             results.push((ProofStep::simple(current_goal.clone(), "Disjunction_Left", vec![p]), b));
             if results.len() >= 3 { return results; } // <-- CAP
         }
-        for (p, b) in prove_dfs(right, axioms, givens, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
+        for (p, b) in prove_dfs(right, axioms, givens, search_index, depth, bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
             results.push((ProofStep::simple(current_goal.clone(), "Disjunction_Right", vec![p]), b));
             if results.len() >= 3 { return results; } // <-- CAP
         }
@@ -1094,7 +1232,7 @@ fn prove_dfs(
         let mut path2 = path.to_vec();
         path2.push(current_goal.clone()); // Push the Exists wrapper to prevent immediate cycle death
 
-        for (sub_proof, final_bindings) in prove_dfs(&witness_goal, axioms, givens, depth - 1, &witness_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
+        for (sub_proof, final_bindings) in prove_dfs(&witness_goal, axioms, givens, search_index, depth - 1, &witness_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget) {
             let resolved_witness = skolem_term.substitute(&final_bindings);
             let concrete_goal = witness_goal.substitute(&final_bindings);
 
@@ -1120,7 +1258,8 @@ fn prove_dfs(
     // ------------------------------------------------------------------
     let mut path2 = path.to_vec(); path2.push(current_goal.clone());
 
-    for axiom in axioms {
+    for &axiom_index in search_index.axiom_candidates(&current_goal) {
+        let axiom = &axioms[axiom_index];
         // Alpha-rename the axiom's universally-quantified variables so that
         // two applications of the same axiom on the same branch cannot
         // collide in the shared `bindings` map.
@@ -1140,7 +1279,7 @@ fn prove_dfs(
                 let mut next_states = Vec::new();
                 for (sub_proofs_so_far, current_bindings) in branch_states {
                     let p_sub = premise.substitute(&current_bindings);
-                    let premise_proofs = prove_dfs(&p_sub, axioms, givens, depth - 1, &current_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget);
+                    let premise_proofs = prove_dfs(&p_sub, axioms, givens, search_index, depth - 1, &current_bindings, &path2, skolem_ctr, axiom_ctr, operations_budget);
 
                     for (proof, b_out) in premise_proofs {
                         let mut next_proofs = sub_proofs_so_far.clone();
@@ -1368,5 +1507,89 @@ mod simplifier_termination_tests {
         }
 
         assert_eq!(unary_depth(&result), MAX_SIMPLIFY_REWRITES);
+    }
+}
+#[cfg(test)]
+mod proof_search_index_tests {
+    use super::*;
+
+    fn axiom(name: &str, conclusion: Formula) -> Axiom {
+        Axiom { name: name.into(), vars: vec![], premises: vec![], conclusion }
+    }
+
+    #[test]
+    fn index_filters_predicates_by_name_and_arity() {
+        let axioms = vec![
+            axiom("P1", Formula::Pred("P".into(), vec![Term::Const("a".into())])),
+            axiom("P2", Formula::Pred("P".into(), vec![
+                Term::Const("a".into()), Term::Const("b".into()),
+            ])),
+            axiom("Q1", Formula::Pred("Q".into(), vec![Term::Const("a".into())])),
+        ];
+        let givens = HashMap::from([
+            ("p".into(), Formula::Pred("P".into(), vec![Term::Const("a".into())])),
+            ("q".into(), Formula::Pred("Q".into(), vec![Term::Const("a".into())])),
+        ]);
+        let index = ProofSearchIndex::new(&axioms, &givens);
+        let goal = Formula::Pred("P".into(), vec![Term::Var("x".into(), Sort::object())]);
+
+        assert_eq!(index.axiom_candidates(&goal), &[0]);
+        assert_eq!(index.given_candidates(&goal), &["p".to_string()]);
+        assert!(index.axiom_candidates(&Formula::Pred("Missing".into(), vec![])).is_empty());
+    }
+
+    #[test]
+    fn index_separates_formula_constructors() {
+        let axioms = vec![
+            axiom("eq", Formula::Eq(Term::Const("a".into()), Term::Const("a".into()))),
+            axiom("not", Formula::Not(Box::new(Formula::Pred("P".into(), vec![])))),
+        ];
+        let index = ProofSearchIndex::new(&axioms, &HashMap::new());
+
+        assert_eq!(index.axiom_candidates(&Formula::Eq(
+            Term::Var("x".into(), Sort::object()),
+            Term::Var("y".into(), Sort::object()),
+        )), &[0]);
+        assert_eq!(index.axiom_candidates(&Formula::Not(Box::new(
+            Formula::Pred("Q".into(), vec![]),
+        ))), &[1]);
+        assert!(index.axiom_candidates(&Formula::Pred("P".into(), vec![])).is_empty());
+    }
+}
+#[cfg(test)]
+mod forward_index_tests {
+    use super::*;
+
+    #[test]
+    fn forward_indexes_filter_irrelevant_rules_and_facts() {
+        let p = Formula::Pred("P".into(), vec![Term::Const("a".into())]);
+        let q = Formula::Pred("Q".into(), vec![Term::Const("a".into())]);
+        let r = Formula::Pred("R".into(), vec![Term::Const("a".into())]);
+        let axioms = vec![
+            Axiom { name: "P_to_R".into(), vars: vec![], premises: vec![p.clone()], conclusion: r.clone() },
+            Axiom { name: "Q_to_R".into(), vars: vec![], premises: vec![q.clone()], conclusion: r.clone() },
+            Axiom { name: "Fact_R".into(), vars: vec![], premises: vec![], conclusion: r.clone() },
+        ];
+        let givens = HashMap::from([("known_p".into(), p)]);
+        let fact_index = FactIndex::new(&givens);
+        let rule_index = ForwardAxiomIndex::new(&axioms);
+
+        assert_eq!(rule_index.candidates(&fact_index), vec![0, 2]);
+        assert_eq!(fact_index.candidates(&q).len(), 0);
+        assert_eq!(fact_index.candidates(&Formula::Pred("P".into(), vec![
+            Term::Var("x".into(), Sort::object()),
+        ])).len(), 1);
+    }
+
+    #[test]
+    fn premise_matching_uses_index_without_changing_bindings() {
+        let premise = Formula::Pred("P".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let fact = Formula::Pred("P".into(), vec![Term::Const("alice".into())]);
+        let givens = HashMap::from([("alice_is_p".into(), fact)]);
+        let index = FactIndex::new(&givens);
+
+        let matches = match_premises_forward(&[premise], &givens, &index, &HashMap::new());
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].get("x"), Some(&Term::Const("alice".into())));
     }
 }

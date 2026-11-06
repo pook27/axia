@@ -1190,10 +1190,18 @@ These are the first changes I would actually make:
 
 |**Sprint 1**|Recommended starting point|
 |---|---|
-|3 / 9 completed|33%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
+|4 / 9 completed|44%|
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**Add axiom/fact indexing**<br>Performance<br>**Add Criterion benchmarks**<br>Performance<br>**Separate trusted assumptions from derived facts**<br>Architecture||
 
 
+
+### **Sprint 1 progress log**
+
+**Simplifier termination protection — done**
+
+- Added active-path cycle detection for rewrite loops.
+- Added a 256-rewrite budget per simplification call to bound expanding rewrite rules.
+- Added regression tests for cyclic and expanding rewrite rules. The project maintainer ran the test suite successfully.
 
 ### **Sprint 1 progress log**
 
