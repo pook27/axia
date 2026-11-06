@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use crate::ast::{Term, Formula, Sort};
 
 pub type Bindings = HashMap<String, Term>;
@@ -491,36 +491,39 @@ const MAX_SIMPLIFY_REWRITES: usize = 256;
 /// Simplify a term using unconditional equational axioms.
 ///
 /// Rewriting is bottom-up and deterministic. A rewrite chain stops when it
-/// reaches a normal form, revisits a term (a rewrite cycle), or consumes the
-/// rewrite budget. In the latter two cases the last non-repeating term is
-/// returned; simplification is best-effort rather than an unbounded process.
+/// reaches a normal form, revisits a term on the current recursive path, or
+/// consumes the rewrite budget. In the latter two cases the last
+/// non-repeating term is returned; simplification is best-effort rather than
+/// an unbounded process.
 pub fn simplify_term(term: &Term, axioms: &[Axiom]) -> Term {
     let mut remaining = MAX_SIMPLIFY_REWRITES;
-    simplify_term_inner(term, axioms, &mut remaining, &mut HashSet::new())
+    simplify_term_inner(term, axioms, &mut remaining, &mut Vec::new())
 }
 
 fn simplify_term_inner(
     term: &Term,
     axioms: &[Axiom],
     remaining: &mut usize,
-    seen: &mut HashSet<Term>,
+    active: &mut Vec<Term>,
 ) -> Term {
-    // Simplify children first. Each child has its own cycle history, while
-    // all children share the same overall rewrite budget.
+    // Simplify children first. The active path is shared so a rewrite such as
+    // x -> f(x) cannot recursively normalize the same term forever.
     let current_term = match term {
         Term::Apply(name, args) => {
             let simplified_args: Vec<Term> = args
                 .iter()
-                .map(|arg| simplify_term_inner(arg, axioms, remaining, &mut HashSet::new()))
+                .map(|arg| simplify_term_inner(arg, axioms, remaining, active))
                 .collect();
             Term::Apply(name.clone(), simplified_args)
         }
         Term::Var(_, _) | Term::Const(_) => term.clone(),
     };
 
-    if *remaining == 0 || !seen.insert(current_term.clone()) {
+    if *remaining == 0 || active.contains(&current_term) {
         return current_term;
     }
+
+    active.push(current_term.clone());
 
     for axiom in axioms {
         if !axiom.premises.is_empty() {
@@ -532,21 +535,23 @@ fn simplify_term_inner(
             if pattern_match(lhs, &current_term, &mut bindings) {
                 let rewritten = rhs.substitute(&bindings);
 
-                if rewritten == current_term {
+                if rewritten == current_term || active.contains(&rewritten) {
                     continue;
                 }
 
-                // Stop before entering a state already visited in this chain.
-                if seen.contains(&rewritten) || *remaining == 0 {
-                    return current_term;
+                if *remaining == 0 {
+                    break;
                 }
 
                 *remaining -= 1;
-                return simplify_term_inner(&rewritten, axioms, remaining, seen);
+                let result = simplify_term_inner(&rewritten, axioms, remaining, active);
+                active.pop();
+                return result;
             }
         }
     }
 
+    active.pop();
     current_term
 }
 
