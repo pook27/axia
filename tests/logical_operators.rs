@@ -129,8 +129,11 @@ fn parses_existential_quantification() {
             var: "x".to_string(),
             sort: Sort("Person".to_string()),
             body: Box::new(predicate(
-                "Parent",
-                vec![variable("x"), variable("bob")],
+                    "Parent",
+                    vec![
+                    Term::Var("x".to_string(), Sort("Person".to_string())),
+                    variable("bob"),
+                    ],
             )),
         }
     );

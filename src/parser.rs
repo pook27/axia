@@ -2,6 +2,7 @@ use crate::ast::{Term, Formula, Statement, Sort};
 use crate::engine::Universe;
 use std::iter::Peekable;
 use std::vec::IntoIter;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Tokens
@@ -49,7 +50,7 @@ pub fn lex(input: &str) -> Vec<Token> {
                 }
                 match s.as_str() {
                     "class" | "where" | "Type" | "Prop" | "forall" | "exists" | "import"
-                    | "Given"
+                        | "Given"
                         => tokens.push(Token::Keyword(s)),
                     "and" => tokens.push(Token::Symbol("∧".to_string())),
                     "or"  => tokens.push(Token::Symbol("∨".to_string())),
@@ -69,24 +70,26 @@ pub fn lex(input: &str) -> Vec<Token> {
 // ---------------------------------------------------------------------------
 
 pub struct Parser<'a> {
-    tokens:   Peekable<IntoIter<Token>>,
-    /// Optional reference to the active Universe.  When present the parser
-    /// uses it to resolve identifiers: names found in `universe.constants`
-    /// become `Term::Const`, everything else remains `Term::Var`.
+    tokens: Peekable<IntoIter<Token>>,
     universe: Option<&'a Universe>,
+    variable_sorts: HashMap<String, Sort>,
 }
 
 impl<'a> Parser<'a> {
     /// Create a parser with access to the active universe for constant lookup.
     pub fn with_universe(tokens: Vec<Token>, universe: Option<&'a Universe>) -> Self {
-        Parser { tokens: tokens.into_iter().peekable(), universe }
+        Parser {
+            tokens: tokens.into_iter().peekable(),
+            universe,
+            variable_sorts: HashMap::new(),
+        }
     }
 
     /// Resolve a bare identifier to either `Term::Const` (if it is registered
     /// in the universe's constant table) or `Term::Var` (otherwise).
     /// Resolve a bare identifier to either a Peano number, `Term::Const`, or `Term::Var`.
     fn ident_to_term(&self, name: String) -> Term {
-        // 1. Syntactic Sugar: Parse digits as Peano numbers (e.g. 3 -> S(S(S(0))))
+        // 1. Syntactic sugar: parse digits as Peano numbers.
         if let Ok(n) = name.parse::<u32>() {
             let mut term = Term::Const("0".to_string());
             for _ in 0..n {
@@ -95,14 +98,19 @@ impl<'a> Parser<'a> {
             return term;
         }
 
-        // 2. Check if it's a registered constant in the universe
+        // 2. Check whether this identifier is a scoped variable.
+        if let Some(sort) = self.variable_sorts.get(&name) {
+            return Term::Var(name, sort.clone());
+        }
+
+        // 3. Check registered constants.
         if let Some(u) = self.universe {
             if u.constants.contains_key(&name) {
                 return Term::Const(name);
             }
         }
-        
-        // 3. Otherwise, it's a free variable
+
+        // 4. Otherwise, it's an untyped free variable.
         Term::Var(name, Sort::object())
     }
 
@@ -216,13 +224,11 @@ impl<'a> Parser<'a> {
     fn parse_exists_formula(&mut self) -> Option<Formula> {
         self.tokens.next(); // consume `∃` / `exists`
 
-        // Variable name
         let var = match self.tokens.next() {
             Some(Token::Ident(v)) => v,
             _ => return None,
         };
 
-        // Optional `: Sort`
         let sort = if self.peek_sym(":") {
             self.tokens.next();
             self.parse_sort()
@@ -230,13 +236,32 @@ impl<'a> Parser<'a> {
             Sort::object()
         };
 
-        // Mandatory `,`
-        if !self.consume_sym(",") { return None; }
+        if !self.consume_sym(",") {
+            return None;
+        }
 
-        // Body — parsed as a full formula so quantifiers can nest
-        let body = self.parse_formula()?;
+        // Introduce the existential variable into scope.
+        let previous_sort = self.variable_sorts.insert(var.clone(), sort.clone());
 
-        Some(Formula::Exists { var, sort, body: Box::new(body) })
+        let body = self.parse_formula();
+
+        // Restore the previous scope.
+        match previous_sort {
+            Some(previous) => {
+                self.variable_sorts.insert(var.clone(), previous);
+            }
+            None => {
+                self.variable_sorts.remove(&var);
+            }
+        }
+
+        let body = body?;
+
+        Some(Formula::Exists {
+            var,
+            sort,
+            body: Box::new(body),
+        })
     }
 
     fn parse_atom(&mut self) -> Option<Formula> {
@@ -248,8 +273,8 @@ impl<'a> Parser<'a> {
                 if self.consume_sym(")") {
                     // LOOKAHEAD: If the next token is a math operator, this was a Math Term, not a Logical Formula!
                     let is_math_cont = self.peek_sym("+") || self.peek_sym("-") || 
-                                       self.peek_sym("*") || self.peek_sym("/") || 
-                                       self.peek_sym("=");
+                        self.peek_sym("*") || self.peek_sym("/") || 
+                        self.peek_sym("=");
                     if !is_math_cont {
                         return Some(f);
                     }
@@ -453,7 +478,8 @@ impl<'a> Parser<'a> {
     fn parse_forall_axiom(&mut self, name: String) -> Option<Statement> {
         self.tokens.next(); // consume `forall` / `∀`
 
-        let mut var_names: Vec<String> = Vec::new();
+        let mut var_names = Vec::new();
+
         while let Some(Token::Ident(v)) = self.tokens.peek() {
             var_names.push(v.clone());
             self.tokens.next();
@@ -462,13 +488,124 @@ impl<'a> Parser<'a> {
         self.consume_sym(":");
         let sort = self.parse_sort();
         self.consume_sym(",");
-        let body = self.parse_formula()?;
 
-        let vars: Vec<(String, Sort)> = var_names
+        // Temporarily introduce the quantified variables into parser scope.
+        // Preserve previous values in case a variable shadows an outer one.
+        let previous_sorts: Vec<(String, Option<Sort>)> = var_names
+            .iter()
+            .map(|v| {
+                let previous = self.variable_sorts.insert(v.clone(), sort.clone());
+                (v.clone(), previous)
+            })
+        .collect();
+
+        let body = self.parse_formula();
+
+        // Restore the previous scope, even if parsing the body failed.
+        for (name, previous) in previous_sorts {
+            match previous {
+                Some(previous_sort) => {
+                    self.variable_sorts.insert(name, previous_sort);
+                }
+                None => {
+                    self.variable_sorts.remove(&name);
+                }
+            }
+        }
+
+        let body = body?;
+
+        let vars = var_names
             .into_iter()
             .map(|v| (v, sort.clone()))
             .collect();
 
         Some(Statement::AxiomDecl { name, vars, body })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{Formula, Sort, Statement, Term};
+    use crate::engine::Universe;
+
+    #[test]
+    fn forall_preserves_variable_sort() {
+        let universe = Universe::new();
+        let tokens = lex("OnLine : forall p : Point, On(p)");
+        let mut parser = Parser::with_universe(tokens, Some(&universe));
+
+        let statement = parser.parse_statement().unwrap();
+
+        match statement {
+            Statement::AxiomDecl { vars, body, .. } => {
+                assert_eq!(vars, vec![("p".to_string(), Sort("Point".to_string()))]);
+
+                match body {
+                    Formula::Pred(_, args) => {
+                        assert_eq!(
+                            args[0],
+                            Term::Var("p".to_string(), Sort("Point".to_string()))
+                        );
+                    }
+                    _ => panic!("Expected predicate"),
+                }
+            }
+            _ => panic!("Expected axiom declaration"),
+        }
+    }
+
+    #[test]
+    fn exists_preserves_variable_sort() {
+        let universe = Universe::new();
+        let tokens = lex("exists x : Point, On(x)");
+        let mut parser = Parser::with_universe(tokens, Some(&universe));
+
+        let formula = parser.parse_formula().unwrap();
+
+        match formula {
+            Formula::Exists { var, sort, body } => {
+                assert_eq!(var, "x");
+                assert_eq!(sort, Sort("Point".to_string()));
+
+                match *body {
+                    Formula::Pred(_, args) => {
+                        assert_eq!(
+                            args[0],
+                            Term::Var("x".to_string(), Sort("Point".to_string()))
+                        );
+                    }
+                    _ => panic!("Expected predicate"),
+                }
+            }
+            _ => panic!("Expected existential"),
+        }
+    }
+
+    #[test]
+    fn quantified_variable_shadows_constant() {
+        let mut universe = Universe::new();
+        universe.add_constant("p".to_string(), Sort("Line".to_string()));
+
+        let tokens = lex("Rule : forall p : Point, On(p)");
+        let mut parser = Parser::with_universe(tokens, Some(&universe));
+
+        let statement = parser.parse_statement().unwrap();
+
+        match statement {
+            Statement::AxiomDecl { body, .. } => {
+                match body {
+                    Formula::Pred(_, args) => {
+                        assert_eq!(
+                            args[0],
+                            Term::Var("p".to_string(), Sort("Point".to_string()))
+                        );
+                    }
+                    _ => panic!("Expected predicate"),
+                }
+            }
+            _ => panic!("Expected axiom declaration"),
+        }
     }
 }
