@@ -375,6 +375,35 @@ mod tests {
     }
 
     #[test]
+    fn proof_search_records_the_axiom_instantiation_for_the_kernel() {
+        let mut universe = Universe::new();
+        let x = Term::Var("x".into(), crate::ast::Sort::object());
+        let alice = Term::Const("alice".into());
+        universe.add_axiom(Axiom {
+            name: "P_to_Q".into(),
+            vars: vec!["x".into()],
+            premises: vec![Formula::Pred("P".into(), vec![x.clone()])],
+            conclusion: Formula::Pred("Q".into(), vec![x]),
+        });
+        universe.add_given(
+            "p_alice".into(),
+            Formula::Pred("P".into(), vec![alice.clone()]),
+        );
+        let goal = Formula::Pred("Q".into(), vec![alice.clone()]);
+        let proof = crate::engine::prove(&goal, &universe, 8)
+            .expect("the axiom should prove Q(alice)");
+
+        match &proof.rule {
+            ProofRule::Axiom(name, instantiations) => {
+                assert_eq!(name, "P_to_Q");
+                assert_eq!(instantiations.get("x"), Some(&alice));
+            }
+            other => panic!("expected an axiom proof, got {other:?}"),
+        }
+        check_proof_for_goal(&proof, &goal, &universe).unwrap();
+    }
+
+    #[test]
     fn rejects_unknown_axioms_and_false_reflexivity() {
         let universe = Universe::new();
         assert!(check_proof(
