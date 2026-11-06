@@ -1298,3 +1298,14 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 - Kept the existing `Formula::unify` and `Bindings` interfaces as compatibility adapters, while adding `unify_into` for callers that reuse a substitution environment.
 - Added regression tests for partial-match rollback, overwritten bindings, branch rollback and occurs-check failure.
 - This is the first migration step, not the completed proof-search optimization: recursive DFS still carries legacy binding snapshots. The next step is to move its branch exploration onto this shared trail and remove those repeated map clones.
+
+
+**Trail-backed backward proof search — implementation awaiting validation**
+
+- Replaced branch-local binding-map snapshots in backward DFS with one mutable `Substitution` and checkpoint/rollback.
+- Added continuation-based search: a successful earlier premise remains active while later premises are explored, so failure backtracks directly into the earlier candidate.
+- Preserved IDDFS depth accounting, the global operation budget, cycle detection, existential witness handling, indexed candidate lookup and proof-tree construction.
+- Sorted indexed given names to make candidate exploration reproducible.
+- Added regression tests for a conjunction that must backtrack from an initially matching but ultimately unusable fact, and for shared bindings across multiple premises of one axiom.
+- The successful top-level result takes one final binding snapshot; intermediate branches no longer clone and merge complete substitution maps.
+- Awaiting maintainer validation with `cargo test` and `cargo bench --bench engine`.
