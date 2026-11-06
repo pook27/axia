@@ -1472,7 +1472,7 @@ fn prove_axiom_premises(
                 axiom_ctr,
                 operations_budget,
                 root_goal,
-                rule_name,
+                rule,
                 next_proofs,
                 continuation,
             )
