@@ -579,8 +579,7 @@ fn unify_formulas_inner(left: &Formula, right: &Formula, subst: &mut Substitutio
             } else {
                 // Compare quantified formulas modulo binder names. Pick a name
                 // absent from both bodies so renaming cannot capture free vars.
-                let empty_bindings = Bindings::new();
-                let fresh = fresh_alpha_name(v1, &[b1, b2], &empty_bindings);
+                let fresh = fresh_alpha_name(v1, &[b1, b2], subst.as_bindings());
                 let left = rename_bound_occurrences(b1, v1, &fresh);
                 let right = rename_bound_occurrences(b2, v2, &fresh);
                 unify_formulas_inner(&left, &right, subst)
