@@ -1110,7 +1110,7 @@ impl ProofSearchIndex {
 /// caller to roll back this branch and try the next alternative.
 type ProofContinuation<'a> = dyn FnMut(&mut Substitution, ProofStep) -> bool + 'a;
 
-/// Attempt to prove \`goal\` using axioms from the given \`universe\`.
+/// Attempt to prove `goal` using axioms from the given `universe`.
 pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<ProofStep> {
     let goal = match goal {
         Formula::Eq(left, right) => {
