@@ -1344,7 +1344,6 @@ This section records the implementation that now exists, rather than the longer-
 **Still required for a genuinely small trusted kernel**
 
 - Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
-- Make all substitutions and axiom-variable instantiations explicit and validate them against declared variables.
 - Strengthen existential witness checking, including sort correctness and capture avoidance.
 - Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
 - Add first-class universal quantification and its introduction/elimination rules.
