@@ -756,7 +756,7 @@ pub fn forward_deduce(
     let mut axiom_counter = 0usize;
 
     for step in 0..max_steps {
-        if delta.is_empty() {
+        if step > 0 && delta.is_empty() {
             break;
         }
 
