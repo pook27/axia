@@ -3,6 +3,14 @@ use crate::engine::Universe;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_VARIABLE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn fresh_variable_key(display_name: &str) -> String {
+    let id = NEXT_VARIABLE_ID.fetch_add(1, Ordering::Relaxed);
+    format!("__axia_var_{}__{}", id, display_name)
+}
 
 // ---------------------------------------------------------------------------
 // Tokens
@@ -90,7 +98,8 @@ fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
 pub struct Parser<'a> {
     tokens: Peekable<IntoIter<Token>>,
     universe: Option<&'a Universe>,
-    variable_sorts: HashMap<String, Sort>,
+    variable_sorts: HashMap<String, (String, Sort)>,
+    free_variables: HashMap<String, String>,
 }
 
 impl<'a> Parser<'a> {
@@ -100,6 +109,7 @@ impl<'a> Parser<'a> {
             tokens: tokens.into_iter().peekable(),
             universe,
             variable_sorts: HashMap::new(),
+            free_variables: HashMap::new(),
         }
     }
 
@@ -117,8 +127,8 @@ impl<'a> Parser<'a> {
         }
 
         // 2. Check whether this identifier is a scoped variable.
-        if let Some(sort) = self.variable_sorts.get(&name) {
-            return Term::Var(name, sort.clone());
+        if let Some((identity, sort)) = self.variable_sorts.get(&name) {
+            return Term::Var(identity.clone(), sort.clone());
         }
 
         // 3. Check registered constants.
@@ -128,8 +138,13 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // 4. Otherwise, it's an untyped free variable.
-        Term::Var(name, Sort::object())
+        // 4. Otherwise, it's a free variable. Give each lexical variable a
+        // stable internal key; its source spelling is display metadata only.
+        let identity = self.free_variables
+            .entry(name.clone())
+            .or_insert_with(|| fresh_variable_key(&name))
+            .clone();
+        Term::Var(identity, Sort::object())
     }
 
     // ------------------------------------------------------------------
@@ -292,7 +307,8 @@ impl<'a> Parser<'a> {
         }
 
         // Introduce the existential variable into scope.
-        let previous_sort = self.variable_sorts.insert(var.clone(), sort.clone());
+        let identity = fresh_variable_key(&var);
+        let previous_sort = self.variable_sorts.insert(var.clone(), (identity.clone(), sort.clone()));
 
         let body = self.parse_formula();
 
@@ -309,7 +325,7 @@ impl<'a> Parser<'a> {
         let body = body?;
 
         Some(Formula::Exists {
-            var,
+            var: identity,
             sort,
             body: Box::new(body),
         })
@@ -543,36 +559,31 @@ impl<'a> Parser<'a> {
         let sort = self.parse_sort()?;
         if !self.consume_sym(",") { return None; }
 
-        // Temporarily introduce the quantified variables into parser scope.
-        // Preserve previous values in case a variable shadows an outer one.
-        let previous_sorts: Vec<(String, Option<Sort>)> = var_names
-            .iter()
-            .map(|v| {
-                let previous = self.variable_sorts.insert(v.clone(), sort.clone());
-                (v.clone(), previous)
-            })
-        .collect();
+        // Each binder receives its own identity, even when it shadows an
+        // outer variable with the same spelling.
+        let mut identities = Vec::with_capacity(var_names.len());
+        let mut previous_sorts = Vec::with_capacity(var_names.len());
+        for display_name in &var_names {
+            let identity = fresh_variable_key(display_name);
+            let previous = self.variable_sorts.insert(
+                display_name.clone(),
+                (identity.clone(), sort.clone()),
+            );
+            identities.push((identity, sort.clone()));
+            previous_sorts.push((display_name.clone(), previous));
+        }
 
         let body = self.parse_formula();
 
-        // Restore the previous scope, even if parsing the body failed.
-        for (name, previous) in previous_sorts {
+        for (display_name, previous) in previous_sorts {
             match previous {
-                Some(previous_sort) => {
-                    self.variable_sorts.insert(name, previous_sort);
-                }
-                None => {
-                    self.variable_sorts.remove(&name);
-                }
+                Some(previous_binding) => { self.variable_sorts.insert(display_name, previous_binding); }
+                None => { self.variable_sorts.remove(&display_name); }
             }
         }
 
         let body = body?;
-
-        let vars = var_names
-            .into_iter()
-            .map(|v| (v, sort.clone()))
-            .collect();
+        let vars = identities;
 
         Some(Statement::AxiomDecl { name, vars, body })
     }
@@ -594,13 +605,14 @@ mod tests {
 
         match statement {
             Statement::AxiomDecl { vars, body, .. } => {
-                assert_eq!(vars, vec![("p".to_string(), Sort("Point".to_string()))]);
+                assert_eq!(vars.len(), 1);
+                assert_eq!(crate::ast::variable_display_name(&vars[0].0), "p");
 
                 match body {
                     Formula::Pred(_, args) => {
                         assert_eq!(
                             args[0],
-                            Term::Var("p".to_string(), Sort("Point".to_string()))
+                            Term::Var(vars[0].0.clone(), Sort("Point".to_string()))
                         );
                     }
                     _ => panic!("Expected predicate"),
@@ -620,14 +632,14 @@ mod tests {
 
         match formula {
             Formula::Exists { var, sort, body } => {
-                assert_eq!(var, "x");
+                assert_eq!(crate::ast::variable_display_name(&var), "x");
                 assert_eq!(sort, Sort("Point".to_string()));
 
                 match *body {
                     Formula::Pred(_, args) => {
                         assert_eq!(
                             args[0],
-                            Term::Var("x".to_string(), Sort("Point".to_string()))
+                            Term::Var(var.clone(), Sort("Point".to_string()))
                         );
                     }
                     _ => panic!("Expected predicate"),
@@ -651,10 +663,9 @@ mod tests {
             Statement::AxiomDecl { body, .. } => {
                 match body {
                     Formula::Pred(_, args) => {
-                        assert_eq!(
-                            args[0],
-                            Term::Var("p".to_string(), Sort("Point".to_string()))
-                        );
+                        let Term::Var(identity, sort) = &args[0] else { panic!("Expected scoped variable"); };
+                        assert_eq!(crate::ast::variable_display_name(identity), "p");
+                        assert_eq!(sort, &Sort("Point".to_string()));
                     }
                     _ => panic!("Expected predicate"),
                 }
@@ -662,4 +673,54 @@ mod tests {
             _ => panic!("Expected axiom declaration"),
         }
     }
+
+    #[test]
+    fn nested_same_name_binders_have_distinct_identities() {
+        let mut parser = Parser::with_universe(
+            lex("exists x : Point, (P(x) & exists x : Line, Q(x))"),
+            None,
+        );
+        let formula = parser.parse_formula_complete().unwrap();
+        let Formula::Exists { var: outer, body, .. } = formula else { panic!("outer exists"); };
+        let Formula::And(left, right) = *body else { panic!("conjunction"); };
+        let Formula::Exists { var: inner, body: inner_body, .. } = *right else { panic!("inner exists"); };
+        let Formula::Pred(_, outer_args) = *left else { panic!("outer predicate"); };
+        let Formula::Pred(_, inner_args) = *inner_body else { panic!("inner predicate"); };
+        let Term::Var(outer_use, _) = &outer_args[0] else { panic!("outer variable"); };
+        let Term::Var(inner_use, _) = &inner_args[0] else { panic!("inner variable"); };
+        assert_eq!(&outer, outer_use);
+        assert_eq!(&inner, inner_use);
+        assert_ne!(outer, inner);
+    }
+
+    #[test]
+    fn repeated_free_variable_occurrences_share_identity() {
+        let mut parser = Parser::with_universe(lex("P(x) & Q(x)"), None);
+        let formula = parser.parse_formula_complete().unwrap();
+        let Formula::And(left, right) = formula else { panic!("conjunction"); };
+        let Formula::Pred(_, left_args) = *left else { panic!("left predicate"); };
+        let Formula::Pred(_, right_args) = *right else { panic!("right predicate"); };
+        assert_eq!(left_args[0], right_args[0]);
+    }
+
+    #[test]
+    fn same_spelling_in_separate_parse_scopes_is_not_same_variable() {
+        let mut first = Parser::with_universe(lex("P(x)"), None);
+        let mut second = Parser::with_universe(lex("P(x)"), None);
+        let first = first.parse_formula_complete().unwrap();
+        let second = second.parse_formula_complete().unwrap();
+        assert_ne!(first, second);
+        assert!(first.unify(&second).is_none());
+    }
+
+    #[test]
+    fn parsed_quantifiers_are_alpha_equivalent_despite_distinct_ids() {
+        let mut first = Parser::with_universe(lex("exists x : Point, P(x)"), None);
+        let mut second = Parser::with_universe(lex("exists y : Point, P(y)"), None);
+        let first = first.parse_formula_complete().unwrap();
+        let second = second.parse_formula_complete().unwrap();
+        assert_ne!(first, second);
+        assert!(first.unify(&second).is_some());
+    }
+
 }
