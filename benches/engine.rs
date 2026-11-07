@@ -81,10 +81,10 @@ fn build_rewrite_workload(size: usize) -> Universe {
     });
 
     for index in 0..size {
-        let noise = Term::Var(format!("noise_{index}"), Sort::object());
+        let noise = Term::Var(format!("noise_{index}").into(), Sort::object());
         universe.add_axiom(Axiom {
             name: format!("irrelevant_rewrite_{index}"),
-            vars: vec![format!("noise_{index}")],
+            vars: vec![format!("noise_{index}").into()],
             premises: vec![],
             conclusion: Formula::Eq(
                 Term::Apply(format!("Noise{index}"), vec![noise.clone()]),
