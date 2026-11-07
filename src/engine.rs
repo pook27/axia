@@ -694,6 +694,95 @@ pub fn pattern_match(pattern: &Term, target: &Term, bindings: &mut Bindings) -> 
     }
 }
 
+// Index unconditional rewrite rules by the outer shape of their left-hand side.
+// Variable-headed rules are kept separately because they can match any term.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum TermHead {
+    Variable,
+    Constant(String),
+    Application(String, usize),
+}
+
+fn term_head(term: &Term) -> TermHead {
+    match term {
+        Term::Var(_, _) => TermHead::Variable,
+        Term::Const(name) => TermHead::Constant(name.clone()),
+        Term::Apply(name, args) => TermHead::Application(name.clone(), args.len()),
+    }
+}
+
+#[derive(Debug, Default)]
+struct RewriteIndex {
+    by_head: HashMap<TermHead, Vec<usize>>,
+    variable_rules: Vec<usize>,
+}
+
+impl RewriteIndex {
+    fn new(axioms: &[Axiom]) -> Self {
+        let mut index = Self::default();
+        for (position, axiom) in axioms.iter().enumerate() {
+            if !axiom.premises.is_empty() {
+                continue;
+            }
+            let Formula::Eq(lhs, _) = &axiom.conclusion else {
+                continue;
+            };
+            match term_head(lhs) {
+                TermHead::Variable => index.variable_rules.push(position),
+                head => index.by_head.entry(head).or_default().push(position),
+            }
+        }
+        index
+    }
+
+    // Merge both already-sorted index lists by original axiom position. This
+    // preserves the simplifier's established first-matching-rule semantics.
+    fn candidates(&self, term: &Term) -> RewriteCandidates<'_> {
+        RewriteCandidates {
+            specific: self.by_head.get(&term_head(term)).map(Vec::as_slice).unwrap_or(&[]),
+            wildcard: &self.variable_rules,
+            specific_position: 0,
+            wildcard_position: 0,
+        }
+    }
+}
+
+struct RewriteCandidates<'a> {
+    specific: &'a [usize],
+    wildcard: &'a [usize],
+    specific_position: usize,
+    wildcard_position: usize,
+}
+
+impl Iterator for RewriteCandidates<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (
+            self.specific.get(self.specific_position),
+            self.wildcard.get(self.wildcard_position),
+        ) {
+            (Some(&specific), Some(&wildcard)) if specific < wildcard => {
+                self.specific_position += 1;
+                Some(specific)
+            }
+            (Some(_), Some(&wildcard)) => {
+                self.wildcard_position += 1;
+                Some(wildcard)
+            }
+            (Some(&specific), None) => {
+                self.specific_position += 1;
+                Some(specific)
+            }
+            (None, Some(&wildcard)) => {
+                self.wildcard_position += 1;
+                Some(wildcard)
+            }
+            (None, None) => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Term rewriting / simplification ("simp" tactic)
 // ---------------------------------------------------------------------------
@@ -729,13 +818,19 @@ const MAX_SIMPLIFY_REWRITES: usize = 256;
 /// non-repeating term is returned; simplification is best-effort rather than
 /// an unbounded process.
 pub fn simplify_term(term: &Term, axioms: &[Axiom]) -> Term {
+    let index = RewriteIndex::new(axioms);
+    simplify_term_indexed(term, axioms, &index)
+}
+
+fn simplify_term_indexed(term: &Term, axioms: &[Axiom], index: &RewriteIndex) -> Term {
     let mut remaining = MAX_SIMPLIFY_REWRITES;
-    simplify_term_inner(term, axioms, &mut remaining, &mut Vec::new())
+    simplify_term_inner(term, axioms, index, &mut remaining, &mut Vec::new())
 }
 
 fn simplify_term_inner(
     term: &Term,
     axioms: &[Axiom],
+    index: &RewriteIndex,
     remaining: &mut usize,
     active: &mut Vec<Term>,
 ) -> Term {
@@ -745,7 +840,7 @@ fn simplify_term_inner(
         Term::Apply(name, args) => {
             let simplified_args: Vec<Term> = args
                 .iter()
-                .map(|arg| simplify_term_inner(arg, axioms, remaining, active))
+                .map(|arg| simplify_term_inner(arg, axioms, index, remaining, active))
                 .collect();
             Term::Apply(name.clone(), simplified_args)
         }
@@ -758,11 +853,8 @@ fn simplify_term_inner(
 
     active.push(current_term.clone());
 
-    for axiom in axioms {
-        if !axiom.premises.is_empty() {
-            continue;
-        }
-
+    for axiom_index in index.candidates(&current_term) {
+        let axiom = &axioms[axiom_index];
         if let Formula::Eq(lhs, rhs) = &axiom.conclusion {
             let mut bindings = Bindings::new();
             if pattern_match(lhs, &current_term, &mut bindings) {
@@ -777,7 +869,7 @@ fn simplify_term_inner(
                 }
 
                 *remaining -= 1;
-                let result = simplify_term_inner(&rewritten, axioms, remaining, active);
+                let result = simplify_term_inner(&rewritten, axioms, index, remaining, active);
                 active.pop();
                 return result;
             }
@@ -953,13 +1045,13 @@ fn match_premises_forward_delta(
 /// Simplify a formula exactly as `prove` does before handing off to DFS:
 /// reduce both sides of an equality, or the arguments of a predicate.
 /// Other formula shapes are returned as-is.
-fn simp_formula(f: Formula, axioms: &[Axiom]) -> Formula {
+fn simp_formula(f: Formula, axioms: &[Axiom], index: &RewriteIndex) -> Formula {
     match f {
         Formula::Eq(l, r) => {
-            Formula::Eq(simplify_term(&l, axioms), simplify_term(&r, axioms))
+            Formula::Eq(simplify_term_indexed(&l, axioms, index), simplify_term_indexed(&r, axioms, index))
         }
         Formula::Pred(name, args) => {
-            Formula::Pred(name, args.iter().map(|a| simplify_term(a, axioms)).collect())
+            Formula::Pred(name, args.iter().map(|a| simplify_term_indexed(a, axioms, index)).collect())
         }
         other => other,
     }
@@ -978,6 +1070,7 @@ pub fn forward_deduce(
     use std::collections::HashSet;
 
     let axioms = universe.axioms.clone();
+    let rewrite_index = RewriteIndex::new(&axioms);
     let rule_index = ForwardAxiomIndex::new(&axioms);
     let mut facts = universe.all_facts();
     let mut known: HashSet<Formula> = facts.values().cloned().collect();
@@ -1015,7 +1108,7 @@ pub fn forward_deduce(
                 if formula_has_free_vars(&conclusion, &HashMap::new()) {
                     continue;
                 }
-                let simplified = simp_formula(conclusion, &axioms);
+                let simplified = simp_formula(conclusion, &axioms, &rewrite_index);
                 if known.insert(simplified.clone()) {
                     deduction_counter += 1;
                     new_this_step.push((
@@ -1051,7 +1144,7 @@ pub fn forward_deduce(
                             continue;
                         }
 
-                        let simplified = simp_formula(conclusion, &axioms);
+                        let simplified = simp_formula(conclusion, &axioms, &rewrite_index);
                         if known.insert(simplified.clone()) {
                             deduction_counter += 1;
                             new_this_step.push((
@@ -1313,10 +1406,11 @@ mod search_path_tests {
 
 /// Attempt to prove `goal` using axioms from the given `universe`.
 pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<ProofStep> {
+    let rewrite_index = RewriteIndex::new(&universe.axioms);
     let goal = match goal {
         Formula::Eq(left, right) => {
-            let simped_left = simplify_term(left, &universe.axioms);
-            let simped_right = simplify_term(right, &universe.axioms);
+            let simped_left = simplify_term_indexed(left, &universe.axioms, &rewrite_index);
+            let simped_right = simplify_term_indexed(right, &universe.axioms, &rewrite_index);
             if simped_left == simped_right {
                 let refl_goal = Formula::Eq(simped_left.clone(), simped_right.clone());
                 return Some(ProofStep::simple(refl_goal, ProofRule::EqualityReflexivity, vec![]));
@@ -1325,7 +1419,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
         }
         Formula::Pred(name, args) => Formula::Pred(
             name.clone(),
-            args.iter().map(|a| simplify_term(a, &universe.axioms)).collect(),
+            args.iter().map(|a| simplify_term_indexed(a, &universe.axioms, &rewrite_index)).collect(),
         ),
         _ => goal.clone(),
     };
@@ -1816,6 +1910,60 @@ fn rejects_predicate_used_as_term() {
     );
 
     assert!(universe.infer_term_sort(&term).is_err());
+}
+
+#[cfg(test)]
+mod rewrite_index_tests {
+    use super::*;
+
+    fn rewrite(lhs: Term, rhs: Term) -> Axiom {
+        Axiom {
+            name: "rewrite".into(),
+            vars: vec![],
+            premises: vec![],
+            conclusion: Formula::Eq(lhs, rhs),
+        }
+    }
+
+    #[test]
+    fn index_filters_by_term_head_and_keeps_original_rule_order() {
+        let x = Term::Var("x".into(), Sort::object());
+        let axioms = vec![
+            rewrite(Term::Apply("f".into(), vec![x.clone()]), x.clone()),
+            rewrite(Term::Const("a".into()), Term::Const("b".into())),
+            rewrite(x.clone(), x.clone()),
+            Axiom {
+                name: "not_a_rewrite".into(),
+                vars: vec![],
+                premises: vec![Formula::Pred("P".into(), vec![])],
+                conclusion: Formula::Eq(Term::Const("a".into()), Term::Const("b".into())),
+            },
+            rewrite(Term::Apply("f".into(), vec![Term::Const("a".into())]), Term::Const("a".into())),
+        ];
+
+        let index = RewriteIndex::new(&axioms);
+        assert_eq!(index.candidates(&Term::Apply("f".into(), vec![Term::Const("a".into())])).collect::<Vec<_>>(), vec![0, 2, 4]);
+        assert_eq!(index.candidates(&Term::Const("a".into())).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(index.candidates(&Term::Apply("g".into(), vec![])).any(|candidate| candidate == 2));
+    }
+
+    #[test]
+    fn indexed_simplification_matches_full_simplification() {
+        let x = Term::Var("x".into(), Sort::object());
+        let axioms = vec![
+            rewrite(Term::Apply("Wrap".into(), vec![x.clone()]), x),
+            rewrite(Term::Apply("Noise".into(), vec![Term::Var("y".into(), Sort::object())]), Term::Const("unused".into())),
+            rewrite(Term::Const("unused".into()), Term::Const("done".into())),
+        ];
+        let term = Term::Apply("Wrap".into(), vec![Term::Const("unused".into())]);
+        let index = RewriteIndex::new(&axioms);
+
+        assert_eq!(
+            simplify_term_indexed(&term, &axioms, &index),
+            simplify_term(&term, &axioms)
+        );
+        assert_eq!(simplify_term_indexed(&term, &axioms, &index), Term::Const("done".into()));
+    }
 }
 
 #[cfg(test)]
