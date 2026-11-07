@@ -37,11 +37,11 @@ pub fn print_banner(universe: &str) {
 
 /// A turnstile prompt emphasizes that the input is a proposition or
 /// mathematical declaration, rather than a shell command.
-pub fn prompt(universe: &str) -> String {
+pub fn prompt(_universe: &str) -> String {
     if std::env::var_os("AXIA_ASCII").is_some() {
-        format!("{universe} |- ")
+        "|- ".to_string()
     } else {
-        format!("{universe} ⊢ ")
+        "⊢ ".to_string()
     }
 }
 
@@ -87,10 +87,9 @@ mod tests {
     use super::prompt;
 
     #[test]
-    fn prompt_names_the_active_universe_and_uses_a_turnstile() {
+    fn prompt_is_a_clean_mathematical_turnstile() {
         let prompt = prompt("EuclideanGeometry");
-        assert!(prompt.starts_with("EuclideanGeometry "));
         assert!(prompt.ends_with(' '));
-        assert!(prompt.contains("⊢") || prompt.contains("|-"));
+        assert!(prompt == "⊢ " || prompt == "|- ");
     }
 }
