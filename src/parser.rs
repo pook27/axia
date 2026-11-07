@@ -709,8 +709,15 @@ mod tests {
         let mut second = Parser::with_universe(lex("P(x)"), None);
         let first = first.parse_formula_complete().unwrap();
         let second = second.parse_formula_complete().unwrap();
-        assert_ne!(first, second);
-        assert!(first.unify(&second).is_none());
+        let (Formula::Pred(_, first_args), Formula::Pred(_, second_args)) = (&first, &second) else {
+            panic!("expected predicates");
+        };
+        let (Term::Var(first_id, _), Term::Var(second_id, _)) = (&first_args[0], &second_args[0]) else {
+            panic!("expected free variables");
+        };
+        assert_ne!(first_id, second_id);
+        let bindings = first.unify(&second).expect("distinct free variables remain unifiable");
+        assert_eq!(bindings.get(first_id), Some(&second_args[0]));
     }
 
     #[test]
