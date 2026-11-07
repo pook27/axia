@@ -51,7 +51,7 @@ fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
 
             // Single-character symbols — including ∃ which is now a first-class
             // quantifier in formulas (not just in axiom headers).
-            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '→' | '=' | '∨' | '¬' | '!' | '|' | '+' | '*' | '/' => {
+            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '&' | '→' | '=' | '∨' | '¬' | '!' | '|' | '+' | '*' | '/' => {
                 tokens.push(Token::Symbol(c.to_string()));
                 chars.next();
             }
