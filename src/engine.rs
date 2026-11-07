@@ -1001,14 +1001,19 @@ pub fn forward_deduce(
         // Premise-free predicate axioms are facts in their own right. Process
         // them once, rather than once per saturation iteration.
         if step == 0 {
-            for axiom in &axioms {
-                if !axiom.premises.is_empty() {
-                    continue;
-                }
-                if matches!(&axiom.conclusion, Formula::Eq(_, _)) {
-                    continue;
-                }
+            let mut fact_axiom_positions: Vec<usize> = axioms
+                .iter()
+                .enumerate()
+                .filter_map(|(position, axiom)| {
+                    (axiom.premises.is_empty()
+                        && !matches!(&axiom.conclusion, Formula::Eq(_, _)))
+                        .then_some(position)
+                })
+                .collect();
+            sort_axiom_positions_by_name(&mut fact_axiom_positions, &axioms);
 
+            for axiom_index in fact_axiom_positions {
+                let axiom = &axioms[axiom_index];
                 axiom_counter += 1;
                 let fresh = instantiate_axiom(axiom, axiom_counter);
                 let conclusion = fresh.conclusion.substitute(&HashMap::new());
@@ -1131,11 +1136,20 @@ fn formula_head(formula: &Formula) -> FormulaHead {
     }
 }
 
+/// Sort axiom positions by stable name priority, using the original position
+/// only to break ties between duplicate names.
+fn sort_axiom_positions_by_name(positions: &mut [usize], axioms: &[Axiom]) {
+    positions.sort_unstable_by(|left, right| {
+        axioms[*left].name.cmp(&axioms[*right].name).then_with(|| left.cmp(right))
+    });
+}
+
 /// Index forward rules by every premise head, allowing any premise to
 /// trigger a rule when a matching delta fact arrives.
 #[derive(Debug, Default)]
 struct ForwardAxiomIndex {
     by_premise_head: HashMap<FormulaHead, Vec<usize>>,
+    axiom_names: Vec<String>,
 }
 
 impl ForwardAxiomIndex {
@@ -1153,6 +1167,7 @@ impl ForwardAxiomIndex {
             positions.sort_unstable();
             positions.dedup();
         }
+        index.axiom_names = axioms.iter().map(|axiom| axiom.name.clone()).collect();
         index
     }
 
@@ -1169,6 +1184,9 @@ impl ForwardAxiomIndex {
         // to preserve deterministic rule exploration.
         candidates.sort_unstable();
         candidates.dedup();
+        candidates.sort_unstable_by(|left, right| {
+            self.axiom_names[*left].cmp(&self.axiom_names[*right]).then_with(|| left.cmp(right))
+        });
         candidates
     }
 }
@@ -1228,6 +1246,9 @@ impl ProofSearchIndex {
         }
         for names in index.givens_by_head.values_mut() {
             names.sort();
+        }
+        for positions in index.axioms_by_head.values_mut() {
+            sort_axiom_positions_by_name(positions, axioms);
         }
         index
     }
@@ -2328,5 +2349,68 @@ mod incremental_forward_index_tests {
 
         assert_eq!(rules.candidates(&delta), vec![0, 1]);
         assert_eq!(rules.candidates(&FactIndex::new(&HashMap::new())), Vec::<usize>::new());
+    }
+}
+
+#[cfg(test)]
+mod deterministic_axiom_order_tests {
+    use super::*;
+
+    fn proposition(name: &str) -> Formula {
+        Formula::Pred(name.to_string(), vec![])
+    }
+
+    fn fact_axiom(name: &str, conclusion: &str) -> Axiom {
+        Axiom {
+            name: name.to_string(),
+            vars: vec![],
+            premises: vec![],
+            conclusion: proposition(conclusion),
+        }
+    }
+
+    #[test]
+    fn proof_search_prefers_axiom_names_not_declaration_order() {
+        let mut first = Universe::new();
+        first.add_axiom(fact_axiom("Z_rule", "P"));
+        first.add_axiom(fact_axiom("A_rule", "P"));
+
+        let mut second = Universe::new();
+        second.add_axiom(fact_axiom("A_rule", "P"));
+        second.add_axiom(fact_axiom("Z_rule", "P"));
+
+        for universe in [&first, &second] {
+            let proof = prove(&proposition("P"), universe, 2).unwrap();
+            assert!(matches!(proof.rule, ProofRule::Axiom(ref name, _) if name == "A_rule"));
+        }
+    }
+
+    #[test]
+    fn forward_fact_names_are_stable_across_axiom_declaration_order() {
+        let mut first = Universe::new();
+        first.add_axiom(fact_axiom("Z_rule", "Z"));
+        first.add_axiom(fact_axiom("A_rule", "A"));
+
+        let mut second = Universe::new();
+        second.add_axiom(fact_axiom("A_rule", "A"));
+        second.add_axiom(fact_axiom("Z_rule", "Z"));
+
+        let first_result = forward_deduce(&mut first, 1);
+        let second_result = forward_deduce(&mut second, 1);
+        assert_eq!(first_result, second_result);
+        assert_eq!(first_result[0], ("Deduction_1".to_string(), proposition("A")));
+        assert_eq!(first_result[1], ("Deduction_2".to_string(), proposition("Z")));
+    }
+
+    #[test]
+    fn premise_candidates_use_name_priority() {
+        let premise = proposition("P");
+        let axioms = vec![
+            Axiom { name: "Z_rule".into(), vars: vec![], premises: vec![premise.clone()], conclusion: proposition("Z") },
+            Axiom { name: "A_rule".into(), vars: vec![], premises: vec![premise.clone()], conclusion: proposition("A") },
+        ];
+        let facts = HashMap::from([("p".into(), premise)]);
+        let index = ForwardAxiomIndex::new(&axioms);
+        assert_eq!(index.candidates(&FactIndex::new(&facts)), vec![1, 0]);
     }
 }
