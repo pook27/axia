@@ -68,7 +68,7 @@ fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
                 }
                 match s.as_str() {
                     "class" | "where" | "Type" | "Prop" | "forall" | "exists" | "import"
-                        | "Given"
+                        | "axiom" | "assume" | "given" | "Given"
                         => tokens.push(Token::Keyword(s)),
                     "and" => tokens.push(Token::Symbol("∧".to_string())),
                     "or"  => tokens.push(Token::Symbol("∨".to_string())),
@@ -472,12 +472,27 @@ impl<'a> Parser<'a> {
             return Some(Statement::Import(universe_name));
         }
 
-        // `Given <Name> : <Formula>`
-        //
-        // Parsed as a keyword arm before the generic Ident path so that
-        // "Given" is never mistaken for a type/constant/predicate name.
-        if self.peek_kw("Given") {
-            self.tokens.next(); // consume `Given`
+        // Canonical mathematical declaration forms:
+        //   axiom Name : forall x : Sort, proposition
+        //   assume Name : proposition
+        //   given Name : proposition
+        // The older `Name : forall ...` and `Given Name : ...` forms
+        // remain accepted as compatibility syntax.
+        if self.peek_kw("axiom") {
+            self.tokens.next();
+            let name = match self.tokens.next() {
+                Some(Token::Ident(n)) => n,
+                _ => return None,
+            };
+            if !self.consume_sym(":") { return None; }
+            if self.peek_kw("forall") || self.peek_sym("∀") {
+                return self.parse_forall_axiom(name);
+            }
+            return None;
+        }
+
+        if self.peek_kw("assume") || self.peek_kw("given") || self.peek_kw("Given") {
+            self.tokens.next();
             let hyp_name = match self.tokens.next() {
                 Some(Token::Ident(n)) => n,
                 _ => return None,
@@ -730,6 +745,55 @@ mod tests {
         let second = second.parse_formula_complete().unwrap();
         assert_ne!(first, second);
         assert!(first.unify(&second).is_some());
+    }
+
+    #[test]
+    fn explicit_axiom_keyword_parses_quantified_axiom() {
+        let universe = Universe::new();
+        let mut parser = Parser::with_universe(
+            lex_checked("axiom Equality_Reflexive : forall x : Object, x = x").unwrap(),
+            Some(&universe),
+        );
+
+        match parser.parse_statement_complete().unwrap() {
+            Statement::AxiomDecl { name, vars, body } => {
+                assert_eq!(name, "Equality_Reflexive");
+                assert_eq!(vars.len(), 1);
+                assert_eq!(crate::ast::variable_display_name(&vars[0].0), "x");
+                assert!(matches!(body, Formula::Eq(_, _)));
+            }
+            _ => panic!("Expected an axiom declaration"),
+        }
+    }
+
+    #[test]
+    fn explicit_assume_keyword_parses_named_assumption() {
+        let mut parser = Parser::with_universe(
+            lex_checked("assume Point_On_Line : On(p, l)").unwrap(),
+            None,
+        );
+
+        match parser.parse_statement_complete().unwrap() {
+            Statement::GivenDecl(name, Formula::Pred(predicate, args)) => {
+                assert_eq!(name, "Point_On_Line");
+                assert_eq!(predicate, "On");
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("Expected a named assumption"),
+        }
+    }
+
+    #[test]
+    fn lowercase_given_keyword_is_accepted() {
+        let mut parser = Parser::with_universe(
+            lex_checked("given H : P(a)").unwrap(),
+            None,
+        );
+
+        assert!(matches!(
+            parser.parse_statement_complete().unwrap(),
+            Statement::GivenDecl(name, _) if name == "H"
+        ));
     }
 
 }
