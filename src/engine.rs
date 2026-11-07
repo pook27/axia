@@ -737,23 +737,49 @@ impl RewriteIndex {
 
     // Merge both already-sorted index lists by original axiom position. This
     // preserves the simplifier's established first-matching-rule semantics.
-    fn candidates(&self, term: &Term) -> Vec<usize> {
-        let specific = self.by_head.get(&term_head(term)).map(Vec::as_slice).unwrap_or(&[]);
-        let wildcard = self.variable_rules.as_slice();
-        let mut result = Vec::with_capacity(specific.len() + wildcard.len());
-        let (mut left, mut right) = (0, 0);
-        while left < specific.len() && right < wildcard.len() {
-            if specific[left] < wildcard[right] {
-                result.push(specific[left]);
-                left += 1;
-            } else {
-                result.push(wildcard[right]);
-                right += 1;
-            }
+    fn candidates(&self, term: &Term) -> RewriteCandidates<'_> {
+        RewriteCandidates {
+            specific: self.by_head.get(&term_head(term)).map(Vec::as_slice).unwrap_or(&[]),
+            wildcard: &self.variable_rules,
+            specific_position: 0,
+            wildcard_position: 0,
         }
-        result.extend_from_slice(&specific[left..]);
-        result.extend_from_slice(&wildcard[right..]);
-        result
+    }
+}
+
+struct RewriteCandidates<'a> {
+    specific: &'a [usize],
+    wildcard: &'a [usize],
+    specific_position: usize,
+    wildcard_position: usize,
+}
+
+impl Iterator for RewriteCandidates<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (
+            self.specific.get(self.specific_position),
+            self.wildcard.get(self.wildcard_position),
+        ) {
+            (Some(&specific), Some(&wildcard)) if specific < wildcard => {
+                self.specific_position += 1;
+                Some(specific)
+            }
+            (Some(_), Some(&wildcard)) => {
+                self.wildcard_position += 1;
+                Some(wildcard)
+            }
+            (Some(&specific), None) => {
+                self.specific_position += 1;
+                Some(specific)
+            }
+            (None, Some(&wildcard)) => {
+                self.wildcard_position += 1;
+                Some(wildcard)
+            }
+            (None, None) => None,
+        }
     }
 }
 
@@ -814,7 +840,7 @@ fn simplify_term_inner(
         Term::Apply(name, args) => {
             let simplified_args: Vec<Term> = args
                 .iter()
-                .map(|arg| simplify_term_inner(arg, axioms, remaining, active))
+                .map(|arg| simplify_term_inner(arg, axioms, index, remaining, active))
                 .collect();
             Term::Apply(name.clone(), simplified_args)
         }
@@ -1916,9 +1942,9 @@ mod rewrite_index_tests {
         ];
 
         let index = RewriteIndex::new(&axioms);
-        assert_eq!(index.candidates(&Term::Apply("f".into(), vec![Term::Const("a".into())])), vec![0, 2, 4]);
-        assert_eq!(index.candidates(&Term::Const("a".into())), vec![1, 2]);
-        assert!(index.candidates(&Term::Apply("g".into(), vec![])).contains(&2));
+        assert_eq!(index.candidates(&Term::Apply("f".into(), vec![Term::Const("a".into())])).collect::<Vec<_>>(), vec![0, 2, 4]);
+        assert_eq!(index.candidates(&Term::Const("a".into())).collect::<Vec<_>>(), vec![1, 2]);
+        assert!(index.candidates(&Term::Apply("g".into(), vec![])).any(|candidate| candidate == 2));
     }
 
     #[test]
