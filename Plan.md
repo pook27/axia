@@ -1458,3 +1458,13 @@ The existing search engine remains a proof-discovery component. It is not part o
   - Forward deduction, 8 distractors: 108.37 µs → 87.71 µs; 32: 395.44 µs → 434.59 µs; 128: 1.8175 ms → 1.7215 ms. These mixed results do not establish a systematic regression, and this PR does not modify the forward-deduction path.
 - Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
 - The PR branch is two commits ahead of `main` and has no base-branch divergence.
+
+
+## Deterministic axiom exploration — implemented, awaiting maintainer validation
+
+- Added a stable axiom priority based on axiom name, with original declaration position as a deterministic tie-breaker for duplicate names.
+- Backward proof-search candidates now use that priority instead of relying on axiom declaration order.
+- Forward-rule candidates and premise-free fact axioms use the same priority, making generated `Deduction_N` ordering stable when equivalent universes declare the same named axioms in different orders.
+- Fact candidates were already sorted by fact name; this change makes axiom choice/order consistent with that existing deterministic behavior.
+- Added regressions that build equivalent universes with reversed axiom declaration order and assert identical chosen proof rules and forward-deduction output.
+- **Validation pending:** the maintainer should run `cargo test`. No local Rust toolchain is available in this editing environment.
