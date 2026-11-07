@@ -1459,7 +1459,7 @@ The existing search engine remains a proof-discovery component. It is not part o
   - Proof search, 128 distractors: 86.469 ms → 22.927 ms (**73.5% faster**).
   - Forward deduction, 8 distractors: 108.37 µs → 87.71 µs; 32: 395.44 µs → 434.59 µs; 128: 1.8175 ms → 1.7215 ms. These mixed results do not establish a systematic regression, and this PR does not modify the forward-deduction path.
 - Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
-- The PR branch is two commits ahead of `main` and has no base-branch divergence.
+- This implementation was subsequently merged into `main`; the recorded measurements are the controlled pre-merge comparison.
 
 ## Indexed unconditional rewrite rules — implemented and benchmark-validated
 
@@ -1489,6 +1489,6 @@ The existing search engine remains a proof-discovery component. It is not part o
 - Every proof-node goal is validated against the active universe before its rule is checked.
 - Existential introduction now checks that the supplied witness has the exact sort declared by the existential binder. Variable witnesses use their explicit AST sort; constants and function applications must have a known sort in the universe.
 - Added adversarial regressions for instance-to-general goal substitution, alpha-equivalent quantified goals, wrong-sort witnesses, and capture-avoiding substitution when a witness would collide with a nested binder.
-- **Validation pending:** the maintainer must run `cargo test` and `cargo bench --bench engine` before this change is considered complete.
+- **Validation pending:** the maintainer must run `cargo test` before this change is considered complete. This kernel-only change does not alter the benchmarked search and deduction hot paths.
 - **Next kernel task:** represent equality rewriting as explicit proof objects and have the kernel validate each rewrite step. The current simplifier still normalizes goals outside the proof tree.
 
