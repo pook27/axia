@@ -1192,7 +1192,7 @@ These are the first changes I would actually make:
 |**Sprint 1**|Recommended starting point|
 |---|---|
 |8 / 9 completed|89%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**- [x] Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**- [x] Introduce unique variable IDs**<br>AST<br>**- [x] Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
 
 
 
@@ -1413,7 +1413,7 @@ The existing search engine remains a proof-discovery component. It is not part o
 - The optimization is validated for correctness and shows substantial measured gains in forward deduction.
 
 
-## Sprint 1 final item — typed variable identities (implementation in review)
+## Sprint 1 final item — typed variable identities (done)
 
 - Added an opaque `VarId` newtype to the AST. Variable identity is now a distinct type rather than an ordinary `String`; its payload is private and source-level spelling is exposed only through the display boundary.
 - Migrated `Term::Var`, existential binders, and parsed axiom-variable declarations to carry `VarId`.
@@ -1422,4 +1422,4 @@ The existing search engine remains a proof-discovery component. It is not part o
 - The kernel's existential substitutions and explicit axiom-instantiation validation now consume the typed identities.
 - Parser scopes and free-variable interning now store `VarId`; nested shadowing still receives distinct identities while repeated free-variable occurrences share one identity within a parser.
 - Added AST regressions for fresh identity uniqueness and stable display names across derived instances.
-- **Validation status:** the maintainer ran `cargo test` and exposed integration-test constructors and one assertion that still expected string-backed variables. Those call sites are now migrated to `VarId`; an unused parser-test import and obsolete binding-map compatibility wrappers were also removed. The updated branch still requires a fresh `cargo test` run before Sprint 1 can be marked complete.
+- **Validation status: passed.** The maintainer reran `cargo test` on the completed migration. All 48 library tests passed, including the capture-avoidance regression, typed identity, parser-scope, substitution, unification, and kernel tests. Sprint 1 is now complete (9/9).
