@@ -1442,3 +1442,19 @@ The existing search engine remains a proof-discovery component. It is not part o
 - Parser scopes and free-variable interning now store `VarId`; nested shadowing still receives distinct identities while repeated free-variable occurrences share one identity within a parser.
 - Added AST regressions for fresh identity uniqueness and stable display names across derived instances.
 - **Validation status: passed.** The maintainer reran `cargo test` on the completed migration. All 48 library tests passed, including the capture-avoidance regression, typed identity, parser-scope, substitution, unification, and kernel tests. Sprint 1 is now complete (9/9).
+
+
+## Persistent proof-search ancestry — implemented and validated
+
+- Replaced recursive proof-search ancestry vectors with an immutable persistent path backed by `Rc`.
+- Extending a branch now allocates one path node and shares its parent instead of cloning the complete ancestor vector at every search node.
+- Applied the same representation to ordinary goal search and axiom-premise search; cycle detection still checks the same structural ancestors.
+- Added a regression test covering ancestor visibility and sibling-branch isolation.
+- The maintainer reports that **all tests pass** on PR #25.
+- Controlled branch comparison on the same machine, using `cargo bench --bench engine -- --warm-up-time 5 --measurement-time 20 --sample-size 50` on `main` and the PR branch:
+  - Proof search, 8 distractors: 140.29 µs → 101.82 µs (**27.4% faster**).
+  - Proof search, 32 distractors: 2.7682 ms → 1.5699 ms (**43.3% faster**).
+  - Proof search, 128 distractors: 86.469 ms → 22.927 ms (**73.5% faster**).
+  - Forward deduction, 8 distractors: 108.37 µs → 87.71 µs; 32: 395.44 µs → 434.59 µs; 128: 1.8175 ms → 1.7215 ms. These mixed results do not establish a systematic regression, and this PR does not modify the forward-deduction path.
+- Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
+- The PR branch is two commits ahead of `main` and has no base-branch divergence.
