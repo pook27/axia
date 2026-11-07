@@ -11,6 +11,19 @@ pub fn print_banner(universe: &str) {
         return;
     }
 
+    if std::env::var_os("AXIA_ASCII").is_some() {
+        println!();
+        println!("+-- AXIA ---------------------------------------------+");
+        println!("|                                                     |");
+        println!("|   A mathematical workspace                          |");
+        println!("|   State propositions. Explore their consequences.  |");
+        println!("|                                                     |");
+        println!("+-- Universe: {universe} -----------------------------+");
+        println!("  Type :help for notation and workspace commands.");
+        println!();
+        return;
+    }
+
     println!();
     println!("╭─ AXIA ─────────────────────────────────────────────╮");
     println!("│                                                     │");
@@ -25,7 +38,11 @@ pub fn print_banner(universe: &str) {
 /// A turnstile prompt emphasizes that the input is a proposition or
 /// mathematical declaration, rather than a shell command.
 pub fn prompt(universe: &str) -> String {
-    format!("{universe} ⊢ ")
+    if std::env::var_os("AXIA_ASCII").is_some() {
+        format!("{universe} |- ")
+    } else {
+        format!("{universe} ⊢ ")
+    }
 }
 
 /// Run a potentially expensive operation with a tiny terminal-only spinner.
@@ -71,6 +88,9 @@ mod tests {
 
     #[test]
     fn prompt_names_the_active_universe_and_uses_a_turnstile() {
-        assert_eq!(prompt("EuclideanGeometry"), "EuclideanGeometry ⊢ ");
+        let prompt = prompt("EuclideanGeometry");
+        assert!(prompt.starts_with("EuclideanGeometry "));
+        assert!(prompt.ends_with(' '));
+        assert!(prompt.contains("⊢") || prompt.contains("|-"));
     }
 }
