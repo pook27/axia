@@ -1473,13 +1473,13 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - [x] Use mathematical symbols for connectives and implication in proof output and bundled theory files; [ ] complete canonical notation, quantifier consistency, and operator-precedence design.
 - [ ] Improve parser diagnostics with source positions, expected constructs, and actionable suggestions.
 - [ ] Establish a clear distinction between assumptions, axioms, definitions, derived propositions, and kernel-verified theorems.
-- [ ] Migrate bundled `.axia` libraries to the new canonical style once the syntax is stable.
+- [x] Migrate the bundled core logic and Euclidean geometry `.axia` libraries to canonical declarations and symbolic connectives; migrate remaining libraries after syntax review.
 - [ ] Design a public Rust library surface around mathematical concepts rather than internal engine data structures; keep parsing, elaboration, theory construction, proving, and verification as separate layers.
 
 ### 2. Mathematical REPL
 - [x] Replace the programmer-oriented prompt/header with a mathematical workspace and turnstile prompt.
 - [x] Add colon-prefixed workspace commands, mathematical help, and initial aliases (`:context`, `:universes`, `:derive`); completion and richer contextual discovery remain open.
-- [ ] Present goals, assumptions, derived results, and proof steps using mathematical notation and readable proof structure.
+- [x] Present goals and logical connectives using mathematical notation and identify kernel-checked proofs; [ ] improve proof-tree structure and context presentation.
 - [ ] Give clear, consistent feedback for accepted declarations, failed parsing, unknown names, unproved goals, and verified proofs.
 - [ ] Add multi-line input and continuation for declarations and proofs that span lines.
 
@@ -1496,7 +1496,7 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - [ ] Provide examples that use the same mathematical vocabulary and syntax as the REPL and `.axia` files.
 
 ### 5. Validation and migration
-- [ ] Add parser compatibility tests for old syntax and acceptance tests for canonical mathematical syntax.
+- [x] Add parser tests for canonical axiom/assumption declarations; existing tests continue to cover legacy declarations. [ ] Run the full suite and add broader language golden tests.
 - [ ] Add snapshot/golden tests for REPL output, proof trees, errors, and terminal fallback.
 - [ ] Test library loading and existing geometry/core theories after every language change.
 - [ ] Migrate in coherent vertical slices; do not replace the parser, engine, and terminal UI in one risky rewrite.
