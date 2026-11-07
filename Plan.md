@@ -1458,6 +1458,54 @@ The existing search engine remains a proof-discovery component. It is not part o
   - Forward deduction, 8 distractors: 108.37 µs → 87.71 µs; 32: 395.44 µs → 434.59 µs; 128: 1.8175 ms → 1.7215 ms. These mixed results do not establish a systematic regression, and this PR does not modify the forward-deduction path.
 - Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
 - The PR branch is two commits ahead of `main` and has no base-branch divergence.
+# UX redesign — mathematician-first Axia
 
+## Product direction
 
+Axia should feel like a mathematical workspace in a terminal, not a programming-language REPL. The user-facing language should foreground mathematical objects, assumptions, axioms, definitions, propositions, and verified theorems. Implementation details belong behind the library API and elaboration boundary.
 
+The redesign applies consistently to interactive use and `.axia` theory files. Existing syntax should remain accepted during migration so current libraries and user work do not break abruptly.
+
+## Work plan
+
+### 1. Mathematical language and theory files
+- [ ] Introduce explicit, readable declaration forms (`axiom`, `assume`/`given`, and eventually `definition`, `theorem`, and `lemma`) while retaining legacy declarations as compatibility syntax.
+- [ ] Make formula notation consistent and mathematical: quantifiers, connectives, equality, implication, function application, and infix operators.
+- [ ] Improve parser diagnostics with source positions, expected constructs, and actionable suggestions.
+- [ ] Establish a clear distinction between assumptions, axioms, definitions, derived propositions, and kernel-verified theorems.
+- [ ] Migrate bundled `.axia` libraries to the new canonical style once the syntax is stable.
+- [ ] Design a public Rust library surface around mathematical concepts rather than internal engine data structures; keep parsing, elaboration, theory construction, proving, and verification as separate layers.
+
+### 2. Mathematical REPL
+- [ ] Replace programmer-oriented command presentation with a mathematical workspace and turnstile prompt.
+- [ ] Support concise colon-prefixed workspace commands, contextual help, aliases, and discoverable completion without making commands the primary way to express mathematics.
+- [ ] Present goals, assumptions, derived results, and proof steps using mathematical notation and readable proof structure.
+- [ ] Give clear, consistent feedback for accepted declarations, failed parsing, unknown names, unproved goals, and verified proofs.
+- [ ] Add multi-line input and continuation for declarations and proofs that span lines.
+
+### 3. Terminal experience
+- [ ] Introduce a small terminal presentation layer with capability detection and plain-output fallback.
+- [ ] Use aligned proof trees, Unicode/ASCII borders, concise status indicators, and restrained color.
+- [ ] Add lightweight progress animation for operations that take long enough to benefit from it; never animate when output is redirected.
+- [ ] Respect terminal width, color support, and non-interactive/scripted execution.
+- [ ] Keep the interface fast, quiet, and accessible; animation must never obscure mathematical output.
+
+### 4. Public library experience
+- [ ] Define stable, documented entry points for parsing mathematical source, constructing theories, adding assumptions/axioms, proving propositions, and checking proof certificates.
+- [ ] Avoid requiring library users to manipulate parser tokens, internal substitutions, or engine-specific proof-search structures.
+- [ ] Provide examples that use the same mathematical vocabulary and syntax as the REPL and `.axia` files.
+
+### 5. Validation and migration
+- [ ] Add parser compatibility tests for old syntax and acceptance tests for canonical mathematical syntax.
+- [ ] Add snapshot/golden tests for REPL output, proof trees, errors, and terminal fallback.
+- [ ] Test library loading and existing geometry/core theories after every language change.
+- [ ] Migrate in coherent vertical slices; do not replace the parser, engine, and terminal UI in one risky rewrite.
+
+## Progress log
+
+### 2026-11-07 — UX redesign started
+- Inspected the current REPL, parser, AST, public library module exports, and bundled core/geometry theory files on `main`.
+- Confirmed the current experience is command-oriented (`[universe]>`, `prove`, `assert`, `deduce`), while the parser already accepts useful mathematical notation such as `∀`, `∃`, `∧`, `∨`, `→`, and infix arithmetic.
+- Confirmed the current declaration syntax is inconsistent (`Name : forall ...` versus capitalized `Given Name : ...`) and the proof formatter still renders logical connectives as English words.
+- Initial implementation slice: add canonical `axiom` and `assume` declaration keywords without removing compatibility syntax; shift REPL framing and proof feedback towards mathematical notation; introduce terminal-aware progress feedback; migrate bundled theory examples to the canonical declaration style.
+- No kernel, proof-search, or performance work is included in this UX effort.
