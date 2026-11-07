@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::collections::HashMap;
-use crate::ast::{Term, Formula, Sort};
+use crate::ast::{Term, Formula, Sort, VarId};
 
-pub type Bindings = HashMap<String, Term>;
+pub type Bindings = HashMap<VarId, Term>;
 
 // ---------------------------------------------------------------------------
 // Proof tree
@@ -84,7 +84,7 @@ impl ProofStep {
 #[derive(Debug, Clone)]
 pub struct Axiom {
     pub name:       String,
-    pub vars:       Vec<String>,
+    pub vars:       Vec<VarId>,
     pub premises:   Vec<Formula>,
     pub conclusion: Formula,
 }
@@ -339,7 +339,7 @@ impl Term {
 // Helpers for name-based alpha-renaming. These keep the current AST compatible
 // while ensuring that a binder never captures a variable introduced by a
 // substitution. A future VarId migration can replace this machinery.
-fn term_contains_variable(term: &Term, name: &str) -> bool {
+fn term_contains_variable(term: &Term, name: &VarId) -> bool {
     match term {
         Term::Var(variable, _) => variable == name,
         Term::Const(_) => false,
@@ -347,7 +347,7 @@ fn term_contains_variable(term: &Term, name: &str) -> bool {
     }
 }
 
-fn formula_contains_variable(formula: &Formula, name: &str) -> bool {
+fn formula_contains_variable(formula: &Formula, name: &VarId) -> bool {
     match formula {
         Formula::Eq(left, right) =>
             term_contains_variable(left, name) || term_contains_variable(right, name),
@@ -362,9 +362,9 @@ fn formula_contains_variable(formula: &Formula, name: &str) -> bool {
     }
 }
 
-fn rename_bound_term(term: &Term, old: &str, new: &str) -> Term {
+fn rename_bound_term(term: &Term, old: &VarId, new: &VarId) -> Term {
     match term {
-        Term::Var(name, sort) if name == old => Term::Var(new.to_string(), sort.clone()),
+        Term::Var(name, sort) if name == old => Term::Var(new.clone(), sort.clone()),
         Term::Var(_, _) | Term::Const(_) => term.clone(),
         Term::Apply(name, args) => Term::Apply(
             name.clone(),
@@ -375,7 +375,7 @@ fn rename_bound_term(term: &Term, old: &str, new: &str) -> Term {
 
 /// Rename occurrences bound by the surrounding quantifier. A nested
 /// quantifier using the same name shadows it, so its body is left untouched.
-fn rename_bound_occurrences(formula: &Formula, old: &str, new: &str) -> Formula {
+fn rename_bound_occurrences(formula: &Formula, old: &VarId, new: &VarId) -> Formula {
     match formula {
         Formula::Eq(left, right) => Formula::Eq(
             rename_bound_term(left, old, new),
@@ -407,10 +407,10 @@ fn rename_bound_occurrences(formula: &Formula, old: &str, new: &str) -> Formula 
     }
 }
 
-fn fresh_alpha_name(base: &str, formulas: &[&Formula], bindings: &Bindings) -> String {
+fn fresh_alpha_name(base: &VarId, formulas: &[&Formula], bindings: &Bindings) -> VarId {
     let mut suffix = 0usize;
     loop {
-        let candidate = format!("{base}__alpha{suffix}");
+        let candidate = base.derived(&format!("__alpha{suffix}"));
         let used_in_formula = formulas
             .iter()
             .any(|formula| formula_contains_variable(formula, &candidate));
@@ -491,7 +491,7 @@ impl Formula {
 #[derive(Debug, Clone, Default)]
 pub struct Substitution {
     bindings: Bindings,
-    trail: Vec<(String, Option<Term>)>,
+    trail: Vec<(VarId, Option<Term>)>,
 }
 
 impl Substitution {
@@ -514,7 +514,7 @@ impl Substitution {
         }
     }
 
-    pub fn bind(&mut self, name: String, term: Term) {
+    pub fn bind(&mut self, name: VarId, term: Term) {
         let previous = self.bindings.insert(name.clone(), term);
         self.trail.push((name, previous));
     }
@@ -523,7 +523,7 @@ impl Substitution {
         term.substitute(&self.bindings)
     }
 
-    pub fn get(&self, name: &str) -> Option<&Term> {
+    pub fn get(&self, name: &VarId) -> Option<&Term> {
         self.bindings.get(name)
     }
 
@@ -642,7 +642,7 @@ impl Formula {
     }
 }
 
-fn occurs_check(n: &str, t: &Term, bindings: &Bindings) -> bool {
+fn occurs_check(n: &VarId, t: &Term, bindings: &Bindings) -> bool {
     let t_res = t.resolve(bindings);
     match t_res {
         Term::Var(v, _)      => v == n,
@@ -831,13 +831,13 @@ fn fresh_skolem(counter: &Cell<u32>) -> String {
 /// function names and sort names are left untouched.
 fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
     // Build a renaming map: old_name → new_name
-    let rename: HashMap<String, String> = axiom.vars
+    let rename: HashMap<VarId, VarId> = axiom.vars
         .iter()
-        .map(|v| (v.clone(), format!("{}__instance{}", v, counter)))
+        .map(|v| (v.clone(), v.derived(&format!("__instance{}", counter))))
         .collect();
 
     /// Rename variables inside a Term.
-    fn rename_term(t: &Term, rename: &HashMap<String, String>) -> Term {
+    fn rename_term(t: &Term, rename: &HashMap<VarId, VarId>) -> Term {
         match t {
             Term::Var(n, s) =>
                 Term::Var(rename.get(n).cloned().unwrap_or_else(|| n.clone()), s.clone()),
@@ -848,7 +848,7 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
     }
 
     /// Rename variables inside a Formula.
-    fn rename_formula(f: &Formula, rename: &HashMap<String, String>) -> Formula {
+    fn rename_formula(f: &Formula, rename: &HashMap<VarId, VarId>) -> Formula {
         match f {
             Formula::Eq(l, r) =>
                 Formula::Eq(rename_term(l, rename), rename_term(r, rename)),
@@ -876,7 +876,7 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
 
     Axiom {
         name:       axiom.name.clone(),
-        vars:       axiom.vars.iter().map(|v| format!("{}__instance{}", v, counter)).collect(),
+        vars:       axiom.vars.iter().map(|v| v.derived(&format!("__instance{}", counter))).collect(),
         premises:   axiom.premises.iter().map(|p| rename_formula(p, &rename)).collect(),
         conclusion: rename_formula(&axiom.conclusion, &rename),
     }
@@ -1482,7 +1482,7 @@ fn prove_dfs(
         }
         Formula::Exists { var, sort, body } => {
             let skolem_name = fresh_skolem(skolem_ctr);
-            let skolem_term = Term::Var(skolem_name, sort.clone());
+            let skolem_term = Term::Var(VarId::from(skolem_name), sort.clone());
             let checkpoint = subst.checkpoint();
             subst.bind(var.clone(), skolem_term.clone());
             let witness_goal = body.substitute(subst.as_bindings());
@@ -1565,7 +1565,7 @@ fn prove_axiom_premises(
     operations_budget: &Cell<usize>,
     root_goal: &Formula,
     axiom_name: &str,
-    axiom_vars: &[(String, String)],
+    axiom_vars: &[(VarId, VarId)],
     sub_proofs: Vec<ProofStep>,
     continuation: &mut ProofContinuation<'_>,
 ) -> bool {
