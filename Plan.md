@@ -1356,7 +1356,7 @@ The maintainer reran `cargo bench --bench engine` after the typed variable-ident
 
 ---
 
-# Current implementation status — 2026-11-06
+# Current implementation status — 2026-11-07
 
 This section records the implementation that now exists, rather than the longer-term target architecture described above.
 
@@ -1380,17 +1380,19 @@ This section records the implementation that now exists, rather than the longer-
 - A regression test rejects a valid reflexivity proof when it is offered for a different requested equality.
 - This is an initial guard, not a replacement for explicit proof steps for rewriting. Rewriting must eventually be represented in the proof object and checked from equality premises/rules.
 
-**Still required for a genuinely small trusted kernel**
+**Remaining work for a genuinely small trusted kernel**
 
-- Strengthen existential witness checking, including sort correctness and capture avoidance.
-- Represent equality rewriting as explicit checked derivations rather than preprocessing performed outside the proof tree.
-- Add first-class universal quantification and its introduction/elimination rules.
-- Distinguish theorem declarations from axioms and require every theorem to pass kernel verification.
+- **Implemented in the current kernel-hardening work:** exact root-goal matching modulo bound-variable alpha-renaming; free variables must retain identity and cannot be matched by unification.
+- **Implemented in the current kernel-hardening work:** validate every proof-node goal and named fact against the active universe, and validate existential witness sorts before checking the instantiated sub-proof.
+- **Implemented in the current kernel-hardening work:** existential witness substitution is checked using the AST's capture-avoiding substitution operation.
+- **Still outstanding:** represent equality rewriting as explicit checked derivations rather than preprocessing outside the proof tree.
+- **Still outstanding:** add first-class universal quantification and its introduction/elimination rules.
+- **Still outstanding:** distinguish theorem declarations from axioms and require every theorem to pass kernel verification.
 
 ## Next architectural priorities
 
-1. Finish the kernel trust boundary: exact goal preservation, checked rewriting, and stronger validation of existential witness data.
-2. Introduce first-class universal quantification and robust variable identity/capture-avoiding substitution.
+1. Finish the kernel trust boundary by adding explicit, checked equality-rewrite derivations. Exact root-goal matching and existential witness validation are now implemented.
+2. Introduce first-class universal quantification and its introduction/elimination rules. Typed variable identities and capture-avoiding substitution are already implemented.
 3. Separate verified theorem declarations from axioms and assumptions.
 4. Continue with the named-universe dependency graph after theorem provenance and verification are reliable.
 
@@ -1459,5 +1461,34 @@ The existing search engine remains a proof-discovery component. It is not part o
 - Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
 - The PR branch is two commits ahead of `main` and has no base-branch divergence.
 
+## Indexed unconditional rewrite rules — implemented and benchmark-validated
 
+- Added a term-head index for unconditional equality axioms. Constant- and application-headed rules are selected by matching head; variable-headed rules remain wildcard candidates.
+- Candidate positions are merged in original axiom order without allocating a temporary candidate list, preserving rewrite priority.
+- The index is built once and reused through recursive simplification, forward deduction, and proof-goal normalization.
+- Added regression tests for head filtering, wildcard rules, conditional-equation exclusion, stable candidate order, and equivalence with the previous full-scan simplifier.
+- Added the `forward_deduction_with_rewrite_distractors` Criterion workload at 8, 32, and 128 irrelevant rewrite rules.
+- Controlled comparison against the same benchmark harness on the unindexed baseline:
+  - 8 rules: 47.571 µs → 46.209 µs (2.9% faster; intervals overlap, inconclusive).
+  - 32 rules: 181.93 µs → 180.81 µs (0.6% faster; intervals overlap, inconclusive).
+  - 128 rules: 810.48 µs → 694.46 µs (14.3% faster; intervals do not overlap).
+- Existing proof-search and forward-deduction guardrails showed no broad regression. The 128-rule forward-deduction case was approximately 2.3% slower, while the other guardrail cases were unchanged or improved; small differences should be treated as noise unless repeated.
+- The maintainer reported all tests passing on the implementation branch: 51 library tests, 51 binary tests, 11 logical-operator integration tests, 8 malformed-input integration tests, and 0 doc tests.
+
+## Deterministic axiom exploration — implemented and validated
+
+- Proof-search and forward-deduction candidate positions are sorted by axiom name, with original declaration position as a stable tie-breaker for duplicate names.
+- Premise-free fact axioms are also processed in name order, making generated fact names and exploration order reproducible.
+- Added regression tests for proof-search preference, forward fact-name stability, and premise-candidate ordering across declaration-order changes.
+- The maintainer reported all tests passing: 52 library tests, 52 binary tests, 11 logical-operator integration tests, 8 malformed-input integration tests, and 0 doc tests.
+
+## Trusted-kernel validation hardening — implemented, awaiting maintainer validation
+
+- Replaced root-goal unification with structural comparison modulo bound-variable alpha-renaming. Free variables must retain the same identity; a proof of a specific instance can no longer be accepted as a proof of a general free-variable goal.
+- Named facts are now checked using the same alpha-equivalence relation instead of unification, and their formulas are validated against the active universe before they can justify a proof node.
+- Every proof-node goal is validated against the active universe before its rule is checked.
+- Existential introduction now checks that the supplied witness has the exact sort declared by the existential binder. Variable witnesses use their explicit AST sort; constants and function applications must have a known sort in the universe.
+- Added adversarial regressions for instance-to-general goal substitution, alpha-equivalent quantified goals, wrong-sort witnesses, and capture-avoiding substitution when a witness would collide with a nested binder.
+- **Validation pending:** the maintainer must run `cargo test` and `cargo bench --bench engine` before this change is considered complete.
+- **Next kernel task:** represent equality rewriting as explicit proof objects and have the kernel validate each rewrite step. The current simplifier still normalizes goals outside the proof tree.
 
