@@ -594,7 +594,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Formula, Sort, Statement, Term, VarId};
+    use crate::ast::{Formula, Sort, Statement, Term};
     use crate::engine::Universe;
 
     #[test]
