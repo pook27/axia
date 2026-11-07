@@ -2171,7 +2171,8 @@ mod trail_structural_search_tests {
         let Formula::Exists { var: binder, body, .. } = result else {
             panic!("substitution must preserve the existential");
         };
-        assert_ne!(binder.display_name(), "y");
+        assert_eq!(binder.display_name(), "y");
+        assert_ne!(binder, VarId::from("y"));
         assert_eq!(
             *body,
             Formula::Pred("R".into(), vec![var("y"), var(&binder)])
