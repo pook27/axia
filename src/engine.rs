@@ -496,10 +496,6 @@ pub struct Substitution {
 impl Substitution {
     pub fn new() -> Self { Self::default() }
 
-    pub fn from_bindings(bindings: Bindings) -> Self {
-        Self { bindings, trail: Vec::new() }
-    }
-
     pub fn checkpoint(&self) -> usize { self.trail.len() }
 
     pub fn rollback(&mut self, checkpoint: usize) {
@@ -532,6 +528,7 @@ impl Substitution {
 
     /// Unify two terms transactionally. On failure, this call leaves the
     /// environment exactly as it was before the call.
+    #[cfg(test)]
     pub fn unify_terms(&mut self, left: &Term, right: &Term) -> bool {
         let checkpoint = self.checkpoint();
         if unify_terms_inner(left, right, self) {
@@ -630,15 +627,6 @@ impl Formula {
         subst.unify_formulas(self, goal)
     }
 
-    pub fn unify_term(t1: &Term, t2: &Term, bindings: &mut Bindings) -> bool {
-        let mut subst = Substitution::from_bindings(bindings.clone());
-        if subst.unify_terms(t1, t2) {
-            *bindings = subst.into_bindings();
-            true
-        } else {
-            false
-        }
-    }
 }
 
 fn occurs_check(n: &VarId, t: &Term, bindings: &Bindings) -> bool {
@@ -2183,7 +2171,7 @@ mod trail_structural_search_tests {
         let Formula::Exists { var: binder, body, .. } = result else {
             panic!("substitution must preserve the existential");
         };
-        assert_ne!(binder, "y");
+        assert_ne!(binder.display_name(), "y");
         assert_eq!(
             *body,
             Formula::Pred("R".into(), vec![var("y"), var(&binder)])
