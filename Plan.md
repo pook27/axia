@@ -1470,23 +1470,23 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 
 ### 1. Mathematical language and theory files
 - [x] Add canonical `axiom` and `assume`/`given` declaration forms while retaining legacy declarations as compatibility syntax. `definition`, `theorem`, and `lemma` remain future language work.
-- [ ] Make formula notation consistent and mathematical: quantifiers, connectives, equality, implication, function application, and infix operators.
+- [x] Use mathematical symbols for connectives and implication in proof output and bundled theory files; [ ] complete canonical notation, quantifier consistency, and operator-precedence design.
 - [ ] Improve parser diagnostics with source positions, expected constructs, and actionable suggestions.
 - [ ] Establish a clear distinction between assumptions, axioms, definitions, derived propositions, and kernel-verified theorems.
 - [ ] Migrate bundled `.axia` libraries to the new canonical style once the syntax is stable.
 - [ ] Design a public Rust library surface around mathematical concepts rather than internal engine data structures; keep parsing, elaboration, theory construction, proving, and verification as separate layers.
 
 ### 2. Mathematical REPL
-- [ ] Replace programmer-oriented command presentation with a mathematical workspace and turnstile prompt.
-- [ ] Support concise colon-prefixed workspace commands, contextual help, aliases, and discoverable completion without making commands the primary way to express mathematics.
+- [x] Replace the programmer-oriented prompt/header with a mathematical workspace and turnstile prompt.
+- [x] Add colon-prefixed workspace commands, mathematical help, and initial aliases (`:context`, `:universes`, `:derive`); completion and richer contextual discovery remain open.
 - [ ] Present goals, assumptions, derived results, and proof steps using mathematical notation and readable proof structure.
 - [ ] Give clear, consistent feedback for accepted declarations, failed parsing, unknown names, unproved goals, and verified proofs.
 - [ ] Add multi-line input and continuation for declarations and proofs that span lines.
 
 ### 3. Terminal experience
-- [ ] Introduce a small terminal presentation layer with capability detection and plain-output fallback.
+- [x] Introduce a small terminal presentation layer with terminal detection and plain-output fallback.
 - [ ] Use aligned proof trees, Unicode/ASCII borders, concise status indicators, and restrained color.
-- [ ] Add lightweight progress animation for operations that take long enough to benefit from it; never animate when output is redirected.
+- [x] Add a lightweight ASCII progress spinner for proof search and deduction; it stays silent when stderr is redirected.
 - [ ] Respect terminal width, color support, and non-interactive/scripted execution.
 - [ ] Keep the interface fast, quiet, and accessible; animation must never obscure mathematical output.
 
@@ -1518,4 +1518,6 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - [x] Added a terminal presentation module with terminal detection, a mathematical turnstile prompt, a framed workspace heading, and an ASCII progress spinner that stays silent when stderr is redirected.
 - [x] Added colon-prefixed REPL command support, mathematical workspace help, `:context` / `:universes` aliases, and `:derive` as the mathematical-facing alias for forward deduction.
 - [x] Changed proof presentation to use `∧`, `∨`, `¬`, and `→`, and made successful proof output explicitly identify kernel checking.
+- [x] Updated the bundled core and Euclidean geometry theory files to use Unicode implication/connective notation (`→`, `∧`, `∨`, `¬`) alongside the new declaration forms.
+- [ ] Next: replace the current proof-tree indentation with a proper aligned branch renderer and make output width-aware.
 - [ ] Validation pending: maintainer should run `cargo test`, then load the bundled geometry theory and exercise the new REPL syntax. No test result is claimed yet.
