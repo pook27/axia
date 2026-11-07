@@ -27,22 +27,22 @@ IntersectAt : Circle -> Circle -> Pt
 -- ------------------------------------------
 
 -- Postulate 1: A line can be drawn between any two points
-Ax_Post1_L : forall a b : Pt, On(a, LineFrom(a, b))
-Ax_Post1_R : forall a b : Pt, On(b, LineFrom(a, b))
+axiom Ax_Post1_L : forall a b : Pt, On(a, LineFrom(a, b))
+axiom Ax_Post1_R : forall a b : Pt, On(b, LineFrom(a, b))
 
 -- Postulate 3: A circle can be drawn with any center and radius
-Ax_Radius   : forall a b : Pt, OnCirc(b, Circ(a, b))
+axiom Ax_Radius : forall a b : Pt, OnCirc(b, Circ(a, b))
 -- If a point is on a circle, its distance to the center equals the radius
-Ax_Radii_Eq : forall center edge x : Pt, OnCirc(x, Circ(center, edge)) -> DistEq(center, x, center, edge)
+axiom Ax_Radii_Eq : forall center edge x : Pt, OnCirc(x, Circ(center, edge)) -> DistEq(center, x, center, edge)
 
 -- Intersection Definition
-Ax_Int_L : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c1)
-Ax_Int_R : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c2)
+axiom Ax_Int_L : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c1)
+axiom Ax_Int_R : forall c1 c2 : Circle, OnCirc(IntersectAt(c1, c2), c2)
 
 -- The Parallel Postulate (Dichotomy)
-Ax_NotPar    : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
-Ax_Par       : forall l m : Line, Parallel(l, m) -> not Intersect(l, m)
-Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)
+axiom Ax_NotPar : forall l m : Line, Intersect(l, m) -> not Parallel(l, m)
+axiom Ax_Par : forall l m : Line, Parallel(l, m) -> not Intersect(l, m)
+axiom Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)
 
 -- ------------------------------------------
 -- 3. Euclid's Common Notions (Equality)
@@ -50,7 +50,7 @@ Ax_Dichotomy : forall l m : Line, Parallel(l, m) or Intersect(l, m)
 
 -- Things which are equal to the same thing are equal to each other.
 -- (Written in A -> B -> C curried form so the forward engine evaluates sequentially)
-Ax_Dist_Trans : forall p1 p2 p3 p4 p5 p6 : Pt, DistEq(p1, p2, p3, p4) -> DistEq(p3, p4, p5, p6) -> DistEq(p1, p2, p5, p6)
+axiom Ax_Dist_Trans : forall p1 p2 p3 p4 p5 p6 : Pt, DistEq(p1, p2, p3, p4) -> DistEq(p3, p4, p5, p6) -> DistEq(p1, p2, p5, p6)
 
 
 -- ==========================================
@@ -69,11 +69,11 @@ B : Pt
 -- Let C be the intersection of a circle centered at A passing through B, 
 -- and a circle centered at B passing through A.
 C : Pt
-Given Prop1_H1 : OnCirc(C, Circ(A, B))
-Given Prop1_H2 : OnCirc(C, Circ(B, A))
+assume Prop1_H1 : OnCirc(C, Circ(A, B))
+assume Prop1_H2 : OnCirc(C, Circ(B, A))
 
 -- Provide the engine the geometric symmetry of the base line segment
-Given Prop1_Base_Symm : DistEq(A, B, B, A)
+assume Prop1_Base_Symm : DistEq(A, B, B, A)
 
 -- Let the engine autonomously deduce the consequences of this construction!
 deduce 3
