@@ -1198,6 +1198,17 @@ These are the first changes I would actually make:
 
 ### **Sprint 1 progress log**
 
+**Unique variable identity — parser migration started**
+
+- Parser-created bound variables now receive globally unique internal identities instead of using their source spelling as their identity.
+- Nested binders with the same spelling resolve to different identities; occurrences inside each scope retain the matching identity.
+- Repeated occurrences of a free variable within one parsed expression share an identity, while separate parser scopes do not accidentally alias.
+- Axiom instantiation and alpha-renaming preserve identity suffixes, and AST / REPL formatting hides the internal representation so users continue to see the source variable name.
+- Added parser regression tests for nested same-name binders and repeated free-variable occurrences, separate free-variable scopes, and alpha-equivalence across distinct binder identities.
+- This is the first functional identity step. The public AST and substitution map still encode identity in opaque strings; replacing those with a dedicated `VarId` type and migrating the kernel's binding interfaces remains outstanding. Do not mark the Sprint 1 identity objective complete yet.
+
+### **Sprint 1 progress log**
+
 **Simplifier termination protection — done**
 
 - Added active-path cycle detection for rewrite loops.

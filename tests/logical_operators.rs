@@ -3,9 +3,52 @@ use axia::parser::{lex, Parser};
 
 fn parse_formula(source: &str) -> Formula {
     let mut parser = Parser::with_universe(lex(source), None);
-    parser
+    let formula = parser
         .parse_formula()
-        .unwrap_or_else(|| panic!("failed to parse formula: {source}"))
+        .unwrap_or_else(|| panic!("failed to parse formula: {source}"));
+    normalize_formula(formula)
+}
+
+fn normalize_term(term: Term) -> Term {
+    match term {
+        Term::Var(name, sort) => Term::Var(
+            axia::ast::variable_display_name(&name).to_string(),
+            sort,
+        ),
+        Term::Const(name) => Term::Const(name),
+        Term::Apply(name, args) => {
+            Term::Apply(name, args.into_iter().map(normalize_term).collect())
+        }
+    }
+}
+
+// These tests check source-level syntax and precedence. Internal variable
+// identity is tested separately in parser unit tests.
+fn normalize_formula(formula: Formula) -> Formula {
+    match formula {
+        Formula::Eq(left, right) => Formula::Eq(normalize_term(left), normalize_term(right)),
+        Formula::Pred(name, args) => {
+            Formula::Pred(name, args.into_iter().map(normalize_term).collect())
+        }
+        Formula::And(left, right) => Formula::And(
+            Box::new(normalize_formula(*left)),
+            Box::new(normalize_formula(*right)),
+        ),
+        Formula::Or(left, right) => Formula::Or(
+            Box::new(normalize_formula(*left)),
+            Box::new(normalize_formula(*right)),
+        ),
+        Formula::Not(inner) => Formula::Not(Box::new(normalize_formula(*inner))),
+        Formula::Implies(left, right) => Formula::Implies(
+            Box::new(normalize_formula(*left)),
+            Box::new(normalize_formula(*right)),
+        ),
+        Formula::Exists { var, sort, body } => Formula::Exists {
+            var: axia::ast::variable_display_name(&var).to_string(),
+            sort,
+            body: Box::new(normalize_formula(*body)),
+        },
+    }
 }
 
 fn variable(name: &str) -> Term {
