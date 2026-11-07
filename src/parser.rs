@@ -365,6 +365,9 @@ impl<'a> Parser<'a> {
         match lhs {
             Term::Apply(name, args) => Some(Formula::Pred(name, args)),
             Term::Var(name, _) | Term::Const(name) => {
+                // The leading identifier is a predicate symbol, not a logic
+                // variable. Free-variable identity applies only to its terms.
+                let name = crate::ast::variable_display_name(&name).to_string();
                 let mut args = Vec::new();
                 // Support juxtaposition `On Point Line`
                 while let Some(Token::Ident(_)) = self.tokens.peek() {
