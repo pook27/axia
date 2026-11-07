@@ -336,9 +336,8 @@ impl Term {
     }
 }
 
-// Helpers for name-based alpha-renaming. These keep the current AST compatible
-// while ensuring that a binder never captures a variable introduced by a
-// substitution. A future VarId migration can replace this machinery.
+// Capture-avoidance helpers operate on opaque variable identities, never on
+// source spellings. Alpha-renaming therefore cannot confuse shadowed binders.
 fn term_contains_variable(term: &Term, name: &VarId) -> bool {
     match term {
         Term::Var(variable, _) => variable == name,
@@ -523,7 +522,7 @@ impl Substitution {
         term.substitute(&self.bindings)
     }
 
-    pub fn get(&self, name: &VarId) -> Option<&Term> {
+    pub fn get(&self, name: &str) -> Option<&Term> {
         self.bindings.get(name)
     }
 
@@ -823,12 +822,8 @@ fn fresh_skolem(counter: &Cell<u32>) -> String {
 // Alpha-renaming helper
 // ---------------------------------------------------------------------------
 
-/// Clone an axiom and suffix every universally-quantified variable name with
-/// `_<counter>` so that two uses of the same axiom within one proof branch
-/// cannot collide in the shared `bindings` map.
-///
-/// Only the names that appear in `axiom.vars` are renamed; predicate /
-/// function names and sort names are left untouched.
+/// Clone an axiom with fresh identities for its universally quantified
+/// variables so repeated applications cannot alias in a shared substitution.
 fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
     // Build a renaming map: old_name → new_name
     let rename: HashMap<VarId, VarId> = axiom.vars
