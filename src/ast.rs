@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{borrow::Borrow, fmt, ops::Deref};
 
 /// A sort/type in the object language, e.g. "Nat", "Pt", "Line", "Prop".
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -6,38 +6,67 @@ pub struct Sort(pub String);
 
 impl Sort {
     pub fn object() -> Self { Sort("Object".to_string()) }
-    pub fn prop() -> Self   { Sort("Prop".to_string()) }
+    pub fn prop() -> Self { Sort("Prop".to_string()) }
 }
 
 impl fmt::Display for Sort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
 }
 
-/// Return the source-level spelling of an internally unique variable key.
-/// Keys are intentionally opaque to the logic engine; only formatters should
-/// call this helper.
-pub fn variable_display_name(key: &str) -> &str {
-    let key = key.split_once("__instance").map_or(key, |(base, _)| base);
-    let key = key.split_once("__alpha").map_or(key, |(base, _)| base);
-    key.strip_prefix("__axia_var_")
-        .and_then(|rest| rest.split_once("__").map(|(_, name)| name))
-        .unwrap_or(key)
+/// Opaque identity of a logical variable.
+///
+/// The payload is deliberately private: source names are presentation metadata,
+/// never the identity used by unification, substitution, or the proof kernel.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct VarId(String);
+
+impl VarId {
+    pub fn fresh(display_name: &str) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(format!("__axia_var_{id}__{display_name}"))
+    }
+
+    pub fn display_name(&self) -> &str {
+        let key = self.0.split_once("__instance").map_or(self.0.as_str(), |(base, _)| base);
+        let key = key.split_once("__alpha").map_or(key, |(base, _)| base);
+        key.strip_prefix("__axia_var_")
+            .and_then(|rest| rest.split_once("__").map(|(_, name)| name))
+            .unwrap_or(key)
+    }
+
+    pub(crate) fn derived(&self, suffix: &str) -> Self {
+        Self(format!("{}{suffix}", self.0))
+    }
 }
 
-/// A term in the object language.
+impl From<String> for VarId {
+    fn from(value: String) -> Self { Self(value) }
+}
+impl From<&str> for VarId {
+    fn from(value: &str) -> Self { Self(value.to_string()) }
+}
+impl Deref for VarId {
+    type Target = str;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+impl Borrow<str> for VarId {
+    fn borrow(&self) -> &str { &self.0 }
+}
+impl fmt::Display for VarId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.display_name()) }
+}
+
+pub fn variable_display_name(key: &VarId) -> &str { key.display_name() }
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
-    /// A logic variable (unknown), carrying an opaque identity key and sort.
-    /// Parser-created keys include a globally unique ID; the source spelling
-    /// is recovered only by `variable_display_name` for user-facing output.
-    Var(String, Sort),
-    /// A ground constant.
+    Var(VarId, Sort),
     Const(String),
-    /// A function application: `f(t1, t2, ...)`.
     Apply(String, Vec<Term>),
 }
 
-/// A first-order formula, now including existential quantification.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Formula {
     Eq(Term, Term),
@@ -46,51 +75,24 @@ pub enum Formula {
     Or(Box<Formula>, Box<Formula>),
     Not(Box<Formula>),
     Implies(Box<Formula>, Box<Formula>),
-    /// ∃ var : Sort, body
-    ///
-    /// During proof search the engine replaces `var` with a fresh Skolem
-    /// constant `?wN` and attempts to prove `body[var := ?wN]`.  If the
-    /// sub-proof succeeds the final bindings tell us what `?wN` resolved to,
-    /// giving the explicit witness.
-    Exists {
-        var:  String,
-        sort: Sort,
-        body: Box<Formula>,
-    },
+    Exists { var: VarId, sort: Sort, body: Box<Formula> },
 }
 
-/// A top-level declaration.
 #[derive(Debug, Clone)]
 pub enum Statement {
     TypeDecl(String),
-    /// A ground constant with a declared sort, e.g. `A : Pt`.
-    /// Unlike `TypeDecl`, the sort is not `"Type"` but a concrete object sort.
     ConstDecl(String, Sort),
-    /// Predicate / function signature declaration: `(name, arg_sorts, return_sort)`.
     PredDecl(String, Vec<Sort>, Sort),
-    AxiomDecl {
-        name: String,
-        vars: Vec<(String, Sort)>,
-        body: Formula,
-    },
-    /// `import <universe_name>` — pull all axioms from another universe.
+    AxiomDecl { name: String, vars: Vec<(VarId, Sort)>, body: Formula },
     Import(String),
-    /// `Given <Name> : <Formula>` — a named hypothesis assumed true in this
-    /// universe.  Unlike `AxiomDecl`, a Given has no universally-quantified
-    /// variables; it is a fully ground (or already-instantiated) fact that
-    /// the engine can use as a direct forward lookup during proof search.
     GivenDecl(String, Formula),
 }
-
-// ---------------------------------------------------------------------------
-// Display impls
-// ---------------------------------------------------------------------------
 
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var(name, _sort) => write!(f, "{}", variable_display_name(name)),
-            Term::Const(name)      => write!(f, "{}", name),
+            Term::Var(name, _) => write!(f, "{}", name.display_name()),
+            Term::Const(name) => write!(f, "{}", name),
             Term::Apply(name, args) => {
                 write!(f, "{}(", name)?;
                 for (i, arg) in args.iter().enumerate() {
@@ -106,7 +108,7 @@ impl fmt::Display for Term {
 impl fmt::Display for Formula {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Formula::Eq(lhs, rhs)   => write!(f, "{} = {}", lhs, rhs),
+            Formula::Eq(lhs, rhs) => write!(f, "{} = {}", lhs, rhs),
             Formula::Pred(name, args) => {
                 write!(f, "{}(", name)?;
                 for (i, arg) in args.iter().enumerate() {
@@ -115,15 +117,15 @@ impl fmt::Display for Formula {
                 }
                 write!(f, ")")
             }
-            Formula::And(l, r)      => write!(f, "({}) ∧ ({})", l, r),
-            Formula::Or(l, r)       => write!(f, "({}) ∨ ({})", l, r),
-            Formula::Not(inner)     => write!(f, "¬({})", inner),
-            Formula::Implies(l, r)  => write!(f, "({}) → ({})", l, r),
+            Formula::And(l, r) => write!(f, "({}) ∧ ({})", l, r),
+            Formula::Or(l, r) => write!(f, "({}) ∨ ({})", l, r),
+            Formula::Not(inner) => write!(f, "¬({})", inner),
+            Formula::Implies(l, r) => write!(f, "({}) → ({})", l, r),
             Formula::Exists { var, sort, body } => {
                 if sort == &Sort::object() {
-                    write!(f, "∃ {}, {}", variable_display_name(var), body)
+                    write!(f, "∃ {}, {}", var.display_name(), body)
                 } else {
-                    write!(f, "∃ {} : {}, {}", variable_display_name(var), sort, body)
+                    write!(f, "∃ {} : {}, {}", var.display_name(), sort, body)
                 }
             }
         }
