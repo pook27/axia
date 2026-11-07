@@ -833,7 +833,7 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
     // Build a renaming map: old_name → new_name
     let rename: HashMap<String, String> = axiom.vars
         .iter()
-        .map(|v| (v.clone(), format!("{}_{}", v, counter)))
+        .map(|v| (v.clone(), format!("{}__instance{}", v, counter)))
         .collect();
 
     /// Rename variables inside a Term.
@@ -876,7 +876,7 @@ fn instantiate_axiom(axiom: &Axiom, counter: usize) -> Axiom {
 
     Axiom {
         name:       axiom.name.clone(),
-        vars:       axiom.vars.iter().map(|v| format!("{}_{}", v, counter)).collect(),
+        vars:       axiom.vars.iter().map(|v| format!("{}__instance{}", v, counter)).collect(),
         premises:   axiom.premises.iter().map(|p| rename_formula(p, &rename)).collect(),
         conclusion: rename_formula(&axiom.conclusion, &rename),
     }
