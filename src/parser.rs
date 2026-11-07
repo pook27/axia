@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
     /// Resolve a bare identifier to either `Term::Const` (if it is registered
     /// in the universe's constant table) or `Term::Var` (otherwise).
     /// Resolve a bare identifier to either a Peano number, `Term::Const`, or `Term::Var`.
-    fn ident_to_term(&self, name: String) -> Term {
+    fn ident_to_term(&mut self, name: String) -> Term {
         // 1. Syntactic sugar: parse digits as Peano numbers.
         if let Ok(n) = name.parse::<u32>() {
             let mut term = Term::Const("0".to_string());
