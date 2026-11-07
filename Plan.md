@@ -1191,8 +1191,8 @@ These are the first changes I would actually make:
 
 |**Sprint 1**|Recommended starting point|
 |---|---|
-|8 / 9 completed|89%|
-|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**Introduce unique variable IDs**<br>AST<br>**- [x] Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
+|9 / 9 completed|100%|
+|**- [x] Add integration tests for the existing logical operators**<br>Tests<br>**- [x] Fix sort propagation and enforce function signatures**<br>Type system<br>**- [x] Introduce unique variable IDs**<br>AST<br>**- [x] Correct capture-avoiding substitution and quantifier handling**<br>Logic<br>**- [x] Add termination protection to the simplifier**<br>Engine<br>**- [x] Reject malformed input and trailing unparsed tokens**<br>Parser<br>**- [x] Add axiom/fact indexing**<br>Performance<br>**- [x] Add Criterion benchmarks**<br>Performance<br>**- [x] Separate trusted assumptions from derived facts**<br>Architecture||
 
 
 
@@ -1205,7 +1205,7 @@ These are the first changes I would actually make:
 - Repeated occurrences of a free variable within one parsed expression share an identity, while separate parser scopes do not accidentally alias.
 - Axiom instantiation and alpha-renaming preserve identity suffixes, and AST / REPL formatting hides the internal representation so users continue to see the source variable name.
 - Added parser regression tests for nested same-name binders and repeated free-variable occurrences, separate free-variable scopes, and alpha-equivalence across distinct binder identities.
-- This is the first functional identity step. The public AST and substitution map still encode identity in opaque strings; replacing those with a dedicated `VarId` type and migrating the kernel's binding interfaces remains outstanding. Do not mark the Sprint 1 identity objective complete yet.
+- This entry records the initial parser-only migration. It was subsequently completed by the typed `VarId` migration documented in the final Sprint 1 section below; the AST, substitution trail, proof objects, and kernel interfaces now use typed identities. The maintainer reran `cargo test` successfully with all 48 library tests passing.
 
 ### **Sprint 1 progress log**
 
@@ -1287,6 +1287,25 @@ The next useful step would be turning this roadmap into a concrete, dependency-o
 
 
 **Criterion benchmark suite — done**
+
+### Latest benchmark run — 2026-11-07
+
+The maintainer reran `cargo bench --bench engine` after the typed variable-identity migration. Criterion compared these results with its saved previous baseline:
+
+| Workload | Distractors | Median | Change | Significance |
+|---|---:|---:|---:|---|
+| Proof search | 8 | 124.83 µs | +9.72% | Regression (p < 0.05) |
+| Proof search | 32 | 2.4330 ms | +0.46% | No significant change (p = 0.63) |
+| Proof search | 128 | 83.370 ms | +0.45% | No significant change (p = 0.75) |
+| Forward deduction | 8 | 85.361 µs | -5.08% | Improvement (p = 0.01) |
+| Forward deduction | 32 | 369.25 µs | -0.37% | No significant change (p = 0.77) |
+| Forward deduction | 128 | 1.3844 ms | -4.42% | Improvement (p = 0.01) |
+
+- The 8-distractor proof-search case is the only statistically significant regression in this run. The medium and large proof-search workloads are statistically unchanged.
+- Forward deduction improved significantly at 8 and 128 distractors; the 32-distractor workload is statistically unchanged.
+- Treat the small proof-search regression as the next investigation target. Do not attribute it to the typed-identity migration without a controlled comparison.
+- Criterion reported outliers in several workloads and warned that the 128-distractor samples did not fit the configured target time. The medians and significance results are recorded as reported; rerun with a longer measurement window when investigating the small proof-search regression.
+
 
 - Added `benches/engine.rs` with separate proof-search and forward-deduction benchmarks at chain sizes 8, 32 and 128.
 - Each workload includes unrelated facts and rules to exercise formula-head indexing rather than measuring only a trivial linear chain.
@@ -1411,3 +1430,15 @@ The existing search engine remains a proof-discovery component. It is not part o
   - 128 distractors: 1.4192 ms median, 88.960% faster.
 - Proof-search benchmarks in the same run regressed by approximately 5–7% at all three sizes. This change does not modify the backward proof-search implementation, so that result is recorded for investigation rather than attributed to the forward-index change.
 - The optimization is validated for correctness and shows substantial measured gains in forward deduction.
+
+
+## Sprint 1 final item — typed variable identities (done)
+
+- Added an opaque `VarId` newtype to the AST. Variable identity is now a distinct type rather than an ordinary `String`; its payload is private and source-level spelling is exposed only through the display boundary.
+- Migrated `Term::Var`, existential binders, and parsed axiom-variable declarations to carry `VarId`.
+- Migrated substitution maps and rollback-trail keys to `VarId`, including unification, occurs checks, capture avoidance, and alpha-renaming.
+- Axiom instantiation now derives fresh typed identities, and proof-object existential witnesses carry `VarId`.
+- The kernel's existential substitutions and explicit axiom-instantiation validation now consume the typed identities.
+- Parser scopes and free-variable interning now store `VarId`; nested shadowing still receives distinct identities while repeated free-variable occurrences share one identity within a parser.
+- Added AST regressions for fresh identity uniqueness and stable display names across derived instances.
+- **Validation status: passed.** The maintainer reran `cargo test` on the completed migration. All 48 library tests passed, including the capture-avoidance regression, typed identity, parser-scope, substitution, unification, and kernel tests. Sprint 1 is now complete (9/9).

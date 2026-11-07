@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use parser::{lex_checked, Parser};
-use ast::{Statement, Formula, Sort};
+use ast::{Statement, Formula, Sort, VarId};
 use engine::{Axiom, Universe, ProofStep, prove_checked, forward_deduce};
 use colored::Colorize;
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ impl Session {
 /// * Existentials and atomic formulas are stored as zero-premise axioms
 ///   whose conclusion is the formula itself; the engine handles the
 ///   existential reduction at search time.
-fn add_axiom(name: String, vars: Vec<String>, formula: Formula, universe: &mut Universe) {
+fn add_axiom(name: String, vars: Vec<VarId>, formula: Formula, universe: &mut Universe) {
     match formula {
         Formula::And(left, right) => {
             add_axiom(format!("{}_L", name), vars.clone(), *left,  universe);
@@ -291,9 +291,9 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
             let prefix = format!("{}   ", "   ".repeat(depth)).bright_black();
             
             if is_abstract {
-                println!("{}↳ Let {} be an abstract variable.", prefix, var.bold());
+                println!("{}↳ Let {} be an abstract variable.", prefix, var.to_string().bold());
             } else {
-                println!("{}↳ Construct {} := {}", prefix, var.bold(), term_str);
+                println!("{}↳ Construct {} := {}", prefix, var.to_string().bold(), term_str);
             }
         }
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
@@ -661,7 +661,7 @@ fn process_line(input: &str, session: &mut Session) {
             println!("{} {}{}{}", "Defined Function/Predicate:".yellow(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
         }
         Some(Statement::AxiomDecl { name, vars, body }) => {
-            let vars_pure: Vec<String> = vars.iter().map(|(n, _)| n.clone()).collect();
+            let vars_pure: Vec<VarId> = vars.iter().map(|(n, _)| n.clone()).collect();
             add_axiom(name.clone(), vars_pure, body, session.current_mut());
             
             let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", ast::variable_display_name(v).cyan(), s.to_string().cyan())).collect();

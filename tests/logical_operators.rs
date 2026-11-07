@@ -1,4 +1,4 @@
-use axia::ast::{Formula, Sort, Term};
+use axia::ast::{Formula, Sort, Term, VarId};
 use axia::parser::{lex, Parser};
 
 fn parse_formula(source: &str) -> Formula {
@@ -12,7 +12,7 @@ fn parse_formula(source: &str) -> Formula {
 fn normalize_term(term: Term) -> Term {
     match term {
         Term::Var(name, sort) => Term::Var(
-            axia::ast::variable_display_name(&name).to_string(),
+            VarId::from(axia::ast::variable_display_name(&name)),
             sort,
         ),
         Term::Const(name) => Term::Const(name),
@@ -44,7 +44,7 @@ fn normalize_formula(formula: Formula) -> Formula {
             Box::new(normalize_formula(*right)),
         ),
         Formula::Exists { var, sort, body } => Formula::Exists {
-            var: axia::ast::variable_display_name(&var).to_string(),
+            var: VarId::from(axia::ast::variable_display_name(&var)),
             sort,
             body: Box::new(normalize_formula(*body)),
         },
@@ -52,7 +52,7 @@ fn normalize_formula(formula: Formula) -> Formula {
 }
 
 fn variable(name: &str) -> Term {
-    Term::Var(name.to_string(), Sort::object())
+    Term::Var(VarId::from(name), Sort::object())
 }
 
 fn predicate(name: &str, args: Vec<Term>) -> Formula {
@@ -64,8 +64,8 @@ fn parses_predicate_application() {
     assert_eq!(
         parse_formula("Parent(alice, bob)"),
         predicate("Parent", vec![
-            Term::Var("alice".to_string(), Sort::object()),
-            Term::Var("bob".to_string(), Sort::object()),
+            Term::Var(VarId::from("alice"), Sort::object()),
+            Term::Var(VarId::from("bob"), Sort::object()),
         ])
     );
 }
@@ -169,12 +169,12 @@ fn parses_existential_quantification() {
     assert_eq!(
         parse_formula("exists x : Person, Parent(x, bob)"),
         Formula::Exists {
-            var: "x".to_string(),
+            var: VarId::from("x"),
             sort: Sort("Person".to_string()),
             body: Box::new(predicate(
                     "Parent",
                     vec![
-                    Term::Var("x".to_string(), Sort("Person".to_string())),
+                    Term::Var(VarId::from("x"), Sort("Person".to_string())),
                     variable("bob"),
                     ],
             )),
@@ -187,10 +187,10 @@ fn parses_nested_existentials() {
     assert_eq!(
         parse_formula("exists x, exists y, Related(x, y)"),
         Formula::Exists {
-            var: "x".to_string(),
+            var: VarId::from("x"),
             sort: Sort::object(),
             body: Box::new(Formula::Exists {
-                var: "y".to_string(),
+                var: VarId::from("y"),
                 sort: Sort::object(),
                 body: Box::new(predicate("Related", vec![variable("x"), variable("y")])),
             }),

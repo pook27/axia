@@ -1,16 +1,8 @@
-use crate::ast::{Term, Formula, Statement, Sort};
+use crate::ast::{Term, Formula, Statement, Sort, VarId};
 use crate::engine::Universe;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static NEXT_VARIABLE_ID: AtomicU64 = AtomicU64::new(1);
-
-fn fresh_variable_key(display_name: &str) -> String {
-    let id = NEXT_VARIABLE_ID.fetch_add(1, Ordering::Relaxed);
-    format!("__axia_var_{}__{}", id, display_name)
-}
 
 // ---------------------------------------------------------------------------
 // Tokens
@@ -98,8 +90,8 @@ fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
 pub struct Parser<'a> {
     tokens: Peekable<IntoIter<Token>>,
     universe: Option<&'a Universe>,
-    variable_sorts: HashMap<String, (String, Sort)>,
-    free_variables: HashMap<String, String>,
+    variable_sorts: HashMap<String, (VarId, Sort)>,
+    free_variables: HashMap<String, VarId>,
 }
 
 impl<'a> Parser<'a> {
@@ -142,7 +134,7 @@ impl<'a> Parser<'a> {
         // stable internal key; its source spelling is display metadata only.
         let identity = self.free_variables
             .entry(name.clone())
-            .or_insert_with(|| fresh_variable_key(&name))
+            .or_insert_with(|| VarId::fresh(&name))
             .clone();
         Term::Var(identity, Sort::object())
     }
@@ -307,7 +299,7 @@ impl<'a> Parser<'a> {
         }
 
         // Introduce the existential variable into scope.
-        let identity = fresh_variable_key(&var);
+        let identity = VarId::fresh(&var);
         let previous_sort = self.variable_sorts.insert(var.clone(), (identity.clone(), sort.clone()));
 
         let body = self.parse_formula();
@@ -364,10 +356,17 @@ impl<'a> Parser<'a> {
         // If no equals sign, promote the Term back into a logical Predicate
         match lhs {
             Term::Apply(name, args) => Some(Formula::Pred(name, args)),
-            Term::Var(name, _) | Term::Const(name) => {
-                // The leading identifier is a predicate symbol, not a logic
-                // variable. Free-variable identity applies only to its terms.
-                let name = crate::ast::variable_display_name(&name).to_string();
+            Term::Var(name, _) => {
+                let name = name.display_name().to_string();
+                let mut args = Vec::new();
+                while let Some(Token::Ident(_)) = self.tokens.peek() {
+                    if let Some(t) = self.parse_term() { args.push(t); } else { break; }
+                }
+                Some(Formula::Pred(name, args))
+            }
+            Term::Const(name) => {
+                // A bare identifier in formula position is a predicate symbol.
+
                 let mut args = Vec::new();
                 // Support juxtaposition `On Point Line`
                 while let Some(Token::Ident(_)) = self.tokens.peek() {
@@ -567,7 +566,7 @@ impl<'a> Parser<'a> {
         let mut identities = Vec::with_capacity(var_names.len());
         let mut previous_sorts = Vec::with_capacity(var_names.len());
         for display_name in &var_names {
-            let identity = fresh_variable_key(display_name);
+            let identity = VarId::fresh(display_name);
             let previous = self.variable_sorts.insert(
                 display_name.clone(),
                 (identity.clone(), sort.clone()),
