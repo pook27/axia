@@ -62,7 +62,7 @@ impl Session {
 /// * Existentials and atomic formulas are stored as zero-premise axioms
 ///   whose conclusion is the formula itself; the engine handles the
 ///   existential reduction at search time.
-fn add_axiom(name: String, vars: Vec<String>, formula: Formula, universe: &mut Universe) {
+fn add_axiom(name: String, vars: Vec<VarId>, formula: Formula, universe: &mut Universe) {
     match formula {
         Formula::And(left, right) => {
             add_axiom(format!("{}_L", name), vars.clone(), *left,  universe);
@@ -661,7 +661,7 @@ fn process_line(input: &str, session: &mut Session) {
             println!("{} {}{}{}", "Defined Function/Predicate:".yellow(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
         }
         Some(Statement::AxiomDecl { name, vars, body }) => {
-            let vars_pure: Vec<String> = vars.iter().map(|(n, _)| n.clone()).collect();
+            let vars_pure: Vec<VarId> = vars.iter().map(|(n, _)| n.clone()).collect();
             add_axiom(name.clone(), vars_pure, body, session.current_mut());
             
             let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", ast::variable_display_name(v).cyan(), s.to_string().cyan())).collect();
