@@ -267,17 +267,17 @@ fn explain_proof(step: &ProofStep) {
     for def in &fmt.definitions { println!("  {}", def); }
     if !fmt.definitions.is_empty() { println!(); }
 
-    explain_recursive(step, "", true, &fmt);
+    explain_recursive(step, "", true, true, &fmt);
     println!("\n{}", "✓ Q.E.D. — checked by the kernel".green().bold());
 }
 
 /// Render proof nodes as a connected tree. The prefix records which ancestor
 /// branches still have siblings, so multi-premise derivations stay aligned.
-fn explain_recursive(step: &ProofStep, prefix: &str, is_last: bool, fmt: &ProofFormatter) {
+fn explain_recursive(step: &ProofStep, prefix: &str, is_last: bool, is_root: bool, fmt: &ProofFormatter) {
     let goal_text = fmt.fmt_formula(&step.goal);
     let rule_label = ProofFormatter::clean_rule_name(step.rule.label()).yellow();
-    let connector = if prefix.is_empty() { "" } else if is_last { "└── " } else { "├── " };
-    let continuation = if prefix.is_empty() { String::new() } else if is_last { "    " } else { "│   " };
+    let connector = if is_root { "" } else if is_last { "└── " } else { "├── " };
+    let continuation = if is_last { "    " } else { "│   " };
     let node_prefix = format!("{prefix}{connector}");
 
     if !step.witnesses.is_empty() {
@@ -286,9 +286,9 @@ fn explain_recursive(step: &ProofStep, prefix: &str, is_last: bool, fmt: &ProofF
             let term_str = fmt.fmt_term(term).green().bold();
             let is_abstract = matches!(term, ast::Term::Var(n, _) if ast::variable_display_name(n).starts_with("?w"));
             if is_abstract {
-                println!("{}{} Let {} be an arbitrary object.", prefix, continuation, var);
+                println!("{}{} Let {} be an arbitrary object.", node_prefix, continuation, var);
             } else {
-                println!("{}{} Choose {} := {}.", prefix, continuation, var, term_str);
+                println!("{}{} Choose {} := {}.", node_prefix, continuation, var, term_str);
             }
         }
     } else if step.sub_proofs.is_empty() {
@@ -310,10 +310,10 @@ fn explain_recursive(step: &ProofStep, prefix: &str, is_last: bool, fmt: &ProofF
         println!("{}{} {}  {}", node_prefix, "⊢".magenta().bold(), goal_text, format!("({explanation})").bright_black());
     }
 
-    let child_prefix = format!("{prefix}{continuation}");
+    let child_prefix = if is_root { String::new() } else { format!("{prefix}{continuation}") };
     let count = step.sub_proofs.len();
     for (index, sub) in step.sub_proofs.iter().enumerate() {
-        explain_recursive(sub, &child_prefix, index + 1 == count, fmt);
+        explain_recursive(sub, &child_prefix, index + 1 == count, false, fmt);
     }
 }
 
@@ -464,7 +464,11 @@ fn process_line(input: &str, session: &mut Session) {
             "(none)".to_string()
         } else {
             let mut entries: Vec<String> = u.predicates.iter()
-                .map(|(name, signature)| format!("{} : {}", name, signature))
+                .map(|(name, (arguments, result))| {
+                    let mut parts = arguments.clone();
+                    parts.push(result.clone());
+                    format!("{} : {}", name, parts.join(" → "))
+                })
                 .collect();
             entries.sort();
             entries.join("\n    ")
