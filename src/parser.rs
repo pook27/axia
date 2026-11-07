@@ -51,7 +51,7 @@ fn lex_inner(input: &str, unknown: &mut Vec<char>) -> Vec<Token> {
 
             // Single-character symbols — including ∃ which is now a first-class
             // quantifier in formulas (not just in axiom headers).
-            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '&' | '→' | '=' | '∨' | '¬' | '!' | '|' | '+' | '*' | '/' => {
+            '(' | ')' | ':' | ',' | '∀' | '∃' | '∧' | '→' | '=' | '∨' | '¬' | '!' | '|' | '+' | '*' | '/' => {
                 tokens.push(Token::Symbol(c.to_string()));
                 chars.next();
             }
@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
 
     fn parse_and(&mut self) -> Option<Formula> {
         let mut left = self.parse_unary()?;
-        while self.peek_sym("∧") || self.peek_sym("&") {
+        while self.peek_sym("∧") {
             self.tokens.next();
             let right = self.parse_unary()?;
             left = Formula::And(Box::new(left), Box::new(right));
@@ -680,7 +680,7 @@ mod tests {
     #[test]
     fn nested_same_name_binders_have_distinct_identities() {
         let mut parser = Parser::with_universe(
-            lex("exists x : Point, (P(x) & exists x : Line, Q(x))"),
+            lex("exists x : Point, (P(x) and exists x : Line, Q(x))"),
             None,
         );
         let formula = parser.parse_formula_complete().unwrap();
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn repeated_free_variable_occurrences_share_identity() {
-        let mut parser = Parser::with_universe(lex("P(x) & Q(x)"), None);
+        let mut parser = Parser::with_universe(lex("P(x) and Q(x)"), None);
         let formula = parser.parse_formula_complete().unwrap();
         let Formula::And(left, right) = formula else { panic!("conjunction"); };
         let Formula::Pred(_, left_args) = *left else { panic!("left predicate"); };
