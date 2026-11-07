@@ -291,7 +291,7 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
             let prefix = format!("{}   ", "   ".repeat(depth)).bright_black();
             
             if is_abstract {
-                println!("{}↳ Let {} be an abstract variable.", prefix, var.bold());
+                println!("{}↳ Let {} be an abstract variable.", prefix, var.to_string().bold());
             } else {
                 println!("{}↳ Construct {} := {}", prefix, var.bold(), term_str);
             }
