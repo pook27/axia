@@ -997,6 +997,10 @@ pub fn forward_deduce(
     let rule_index = ForwardAxiomIndex::new(&axioms);
     let mut facts = universe.all_facts();
     let mut known: HashSet<Formula> = facts.values().cloned().collect();
+    // Build the complete-fact index once. New discoveries are inserted into
+    // it as they enter the database instead of re-indexing every old fact on
+    // every saturation round.
+    let mut known_index = FactIndex::new(&facts);
     let mut delta = facts.clone();
     let mut all_new = Vec::new();
     let mut deduction_counter = 0usize;
@@ -1008,7 +1012,6 @@ pub fn forward_deduce(
         }
 
         let delta_index = FactIndex::new(&delta);
-        let known_index = FactIndex::new(&facts);
         let mut new_this_step: Vec<(String, Formula)> = Vec::new();
 
         // Premise-free predicate axioms are facts in their own right. Process
@@ -1085,6 +1088,7 @@ pub fn forward_deduce(
         for (name, formula) in new_this_step {
             universe.add_derived(name.clone(), formula.clone());
             facts.insert(name.clone(), formula.clone());
+            known_index.insert(name.clone(), formula.clone());
             next_delta.insert(name.clone(), formula.clone());
             all_new.push((name, formula));
         }
@@ -1170,11 +1174,15 @@ impl ForwardAxiomIndex {
 
     fn candidates(&self, delta: &FactIndex) -> Vec<usize> {
         let mut candidates = Vec::new();
-        for (head, positions) in &self.by_premise_head {
-            if delta.contains_head(head) {
+        // Iterate the distinct heads that actually arrived in this delta,
+        // rather than scanning every head represented by every rule.
+        for head in delta.by_head.keys() {
+            if let Some(positions) = self.by_premise_head.get(head) {
                 candidates.extend_from_slice(positions);
             }
         }
+        // Hash-map key iteration is intentionally unordered; sort and dedupe
+        // to preserve deterministic rule exploration.
         candidates.sort_unstable();
         candidates.dedup();
         candidates
@@ -1191,17 +1199,19 @@ impl FactIndex {
     fn new(givens: &HashMap<String, Formula>) -> Self {
         let mut index = Self::default();
         for (name, formula) in givens {
-            index.by_head.entry(formula_head(formula))
-                .or_default().push(name.clone());
-        }
-        for names in index.by_head.values_mut() {
-            names.sort();
+            index.insert(name.clone(), formula.clone());
         }
         index
     }
 
-    fn contains_head(&self, head: &FormulaHead) -> bool {
-        self.by_head.contains_key(head)
+    fn insert(&mut self, name: String, formula: Formula) {
+        let names = self.by_head.entry(formula_head(&formula)).or_default();
+        // Facts are inserted in deduction order, but keep this index's
+        // ordering invariant explicit for callers that build it from maps.
+        match names.binary_search(&name) {
+            Ok(_) => {}
+            Err(position) => names.insert(position, name),
+        }
     }
 
     fn candidates(&self, formula: &Formula) -> &[String] {
@@ -2231,5 +2241,49 @@ mod trail_structural_search_tests {
 
         assert_eq!(proof.rule, ProofRule::DisjunctionIntroductionRight);
         assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
+    }
+}
+
+
+#[cfg(test)]
+mod incremental_forward_index_tests {
+    use super::*;
+
+    #[test]
+    fn fact_index_accepts_new_facts_without_rebuilding() {
+        let p = Formula::Pred("P".into(), vec![Term::Const("a".into())]);
+        let q = Formula::Pred("Q".into(), vec![Term::Const("a".into())]);
+        let mut index = FactIndex::new(&HashMap::new());
+
+        assert!(index.candidates(&p).is_empty());
+        index.insert("p_second".into(), p.clone());
+        index.insert("p_first".into(), p.clone());
+        index.insert("p_first".into(), p.clone());
+        index.insert("q".into(), q.clone());
+
+        assert_eq!(
+            index.candidates(&p),
+            &["p_first".to_string(), "p_second".to_string()]
+        );
+        assert_eq!(index.candidates(&q), &["q".to_string()]);
+    }
+
+    #[test]
+    fn delta_heads_select_only_relevant_forward_rules_deterministically() {
+        let p = Formula::Pred("P".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let q = Formula::Pred("Q".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let r = Formula::Pred("R".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let axioms = vec![
+            Axiom { name: "P_rule".into(), vars: vec![], premises: vec![p.clone()], conclusion: p.clone() },
+            Axiom { name: "Q_rule".into(), vars: vec![], premises: vec![q.clone()], conclusion: q.clone() },
+            Axiom { name: "R_rule".into(), vars: vec![], premises: vec![r.clone()], conclusion: r.clone() },
+        ];
+        let rules = ForwardAxiomIndex::new(&axioms);
+        let mut delta = FactIndex::new(&HashMap::new());
+        delta.insert("q".into(), q);
+        delta.insert("p".into(), p);
+
+        assert_eq!(rules.candidates(&delta), vec![0, 1]);
+        assert_eq!(rules.candidates(&FactIndex::new(&HashMap::new())), Vec::<usize>::new());
     }
 }

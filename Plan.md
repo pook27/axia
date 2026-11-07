@@ -1396,3 +1396,18 @@ The existing search engine remains a proof-discovery component. It is not part o
 - The kernel no longer derives an axiom substitution by unifying the conclusion with the claimed goal. It applies the supplied substitution to the axiom conclusion and every premise, checks the conclusion exactly, and rejects substitution keys not declared by the axiom.
 - Added adversarial tests for undeclared substitution keys and mismatched premises, plus an end-to-end test that checks proof search records an instantiation accepted by the kernel.
 - The maintainer should run `cargo test` before this change is merged.
+
+**Incremental semi-naive forward indexes — implemented and benchmark-validated**
+
+- The complete known-fact index is built once at the start of saturation instead of being reconstructed from every known fact on every deduction round.
+- Newly derived facts are inserted into that index as they enter the fact database.
+- Forward-rule candidate selection iterates the distinct formula heads in the current delta and looks up only those heads in the rule index, rather than scanning every indexed premise head.
+- Candidate rule positions remain sorted and deduplicated, preserving deterministic rule exploration despite hash-map iteration order.
+- Added regressions for incremental fact insertion, duplicate insertion, sorted fact names, and delta-driven rule selection.
+- The maintainer reported the full suite passing: 46 library tests, 46 binary tests, 11 logical-operator integration tests and 8 malformed-input tests.
+- Criterion results against the saved baseline:
+  - 8 distractors: 97.640 µs median, 21.635% faster.
+  - 32 distractors: 359.13 µs median, 64.916% faster.
+  - 128 distractors: 1.4192 ms median, 88.960% faster.
+- Proof-search benchmarks in the same run regressed by approximately 5–7% at all three sizes. This change does not modify the backward proof-search implementation, so that result is recorded for investigation rather than attributed to the forward-index change.
+- The optimization is validated for correctness and shows substantial measured gains in forward deduction.
