@@ -1460,10 +1460,32 @@ The existing search engine remains a proof-discovery component. It is not part o
 - The PR branch is two commits ahead of `main` and has no base-branch divergence.
 
 
-## Performance phase — indexed term rewriting (in progress)
+## Performance phase — indexed term rewriting (implemented and benchmark-validated)
 
-- [ ] Build a per-operation index of unconditional equational rewrite rules by the outer shape of each left-hand side.
-- [ ] Preserve original axiom order, including variable-headed wildcard rules, so simplification semantics remain unchanged.
-- [ ] Reuse the index throughout a complete proof or forward-deduction run instead of rescanning every axiom for every term.
-- [ ] Add regression tests and a Criterion workload with increasing numbers of irrelevant rewrite rules.
-- [ ] Compare the new workload and existing proof/forward benchmarks against the pre-change baseline before recording measured gains.
+- [x] Build a per-operation index of unconditional equational rewrite rules by the outer shape of each left-hand side.
+- [x] Preserve original axiom order, including variable-headed wildcard rules, so simplification semantics remain unchanged.
+- [x] Reuse the index throughout a complete proof or forward-deduction run instead of rescanning every axiom for every term.
+- [x] Add regression tests and a Criterion workload with increasing numbers of irrelevant rewrite rules.
+- [x] Compare the new workload and existing proof/forward benchmarks against an unoptimized baseline built from the same benchmark harness.
+
+**Correctness validation — 2026-11-07**
+
+- The maintainer ran `cargo test` on the optimized branch: 51 library tests, 51 binary tests, 11 logical-operator integration tests, and 8 malformed-input tests passed; doc tests also passed (0 tests).
+- Regression tests verify term-head filtering, original rewrite order, wildcard inclusion, exclusion of conditional equations, and equivalence between indexed and full simplification.
+- The compiler reports one warning: the public `simplify_term` helper is unused in the binary target. It is not a test failure.
+
+**Controlled benchmark comparison — 2026-11-07**
+
+Both branches used the same Criterion workload and machine. The baseline branch contains the benchmark harness but retains the unindexed implementation. Values below are reported medians.
+
+| Workload | Distractors | Baseline | Indexed | Difference |
+|---|---:|---:|---:|---:|
+| Forward deduction with rewrite distractors | 8 | 47.571 µs | 46.209 µs | 2.9% faster |
+| Forward deduction with rewrite distractors | 32 | 181.93 µs | 180.81 µs | 0.6% faster |
+| Forward deduction with rewrite distractors | 128 | 810.48 µs | 694.46 µs | 14.3% faster |
+
+- The 8- and 32-distractor intervals overlap, so those small differences are inconclusive.
+- At 128 distractors, the baseline interval was 791.56–828.53 µs and the indexed interval was 671.47–717.38 µs. The intervals do not overlap, supporting a clear improvement at the largest workload.
+- Existing proof-search and forward-deduction benchmarks showed no material broad regression. The largest existing forward-deduction case was approximately 2.3% slower in the indexed run; monitor it in future comparisons.
+- The 128-distractor proof-search benchmark warned that the configured 50 samples did not fit the 20-second target. Treat its result as a guardrail rather than a precise comparison.
+- Conclusion: the index provides a measured benefit when many irrelevant rewrite rules are present, with the clearest gain at 128 distractors.
