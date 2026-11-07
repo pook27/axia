@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use crate::ast::{Term, Formula, Sort, VarId};
 
 pub type Bindings = HashMap<VarId, Term>;
@@ -1251,6 +1252,65 @@ impl ProofSearchIndex {
 /// caller to roll back this branch and try the next alternative.
 type ProofContinuation<'a> = dyn FnMut(&mut Substitution, ProofStep) -> bool + 'a;
 
+/// Persistent proof-search ancestry. Cloning a path is an O(1) Rc clone;
+/// extending it stores only the new goal instead of copying every ancestor.
+#[derive(Debug, Clone, Default)]
+struct SearchPath(Option<Rc<SearchPathNode>>);
+
+#[derive(Debug)]
+struct SearchPathNode {
+    goal: Formula,
+    parent: SearchPath,
+}
+
+impl SearchPath {
+    fn contains(&self, goal: &Formula) -> bool {
+        let mut node = self.0.as_deref();
+        while let Some(current) = node {
+            if &current.goal == goal {
+                return true;
+            }
+            node = current.parent.0.as_deref();
+        }
+        false
+    }
+
+    fn pushed(&self, goal: Formula) -> Self {
+        Self(Some(Rc::new(SearchPathNode {
+            goal,
+            parent: self.clone(),
+        })))
+    }
+}
+
+#[cfg(test)]
+mod search_path_tests {
+    use super::*;
+
+    fn proposition(name: &str) -> Formula {
+        Formula::Pred(name.to_string(), vec![])
+    }
+
+    #[test]
+    fn persistent_paths_preserve_ancestors_without_mutating_siblings() {
+        let root = SearchPath::default();
+        let first_goal = proposition("P");
+        let second_goal = proposition("Q");
+
+        let first_branch = root.pushed(first_goal.clone());
+        let second_branch = first_branch.pushed(second_goal.clone());
+        let sibling_branch = first_branch.pushed(proposition("R"));
+
+        assert!(!root.contains(&first_goal));
+        assert!(first_branch.contains(&first_goal));
+        assert!(second_branch.contains(&first_goal));
+        assert!(second_branch.contains(&second_goal));
+        assert!(!first_branch.contains(&second_goal));
+        assert!(!sibling_branch.contains(&second_goal));
+        assert!(sibling_branch.contains(&first_goal));
+    }
+}
+
 /// Attempt to prove `goal` using axioms from the given `universe`.
 pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<ProofStep> {
     let goal = match goal {
@@ -1302,7 +1362,7 @@ pub fn prove(goal: &Formula, universe: &Universe, max_depth: u32) -> Option<Proo
             &search_index,
             depth,
             &mut subst,
-            &[],
+            &SearchPath::default(),
             &skolem_counter,
             &axiom_counter,
             &operations_budget,
@@ -1353,7 +1413,7 @@ fn prove_dfs(
     search_index: &ProofSearchIndex,
     depth: u32,
     subst: &mut Substitution,
-    path: &[Formula],
+    path: &SearchPath,
     skolem_ctr: &Cell<u32>,
     axiom_ctr: &Cell<usize>,
     operations_budget: &Cell<usize>,
@@ -1402,8 +1462,7 @@ fn prove_dfs(
         return false;
     }
 
-    let mut next_path = path.to_vec();
-    next_path.push(current_goal.clone());
+    let next_path = path.pushed(current_goal.clone());
 
     match &current_goal {
         Formula::And(left, right) => {
@@ -1542,7 +1601,7 @@ fn prove_axiom_premises(
     search_index: &ProofSearchIndex,
     depth: u32,
     subst: &mut Substitution,
-    path: &[Formula],
+    path: &SearchPath,
     skolem_ctr: &Cell<u32>,
     axiom_ctr: &Cell<usize>,
     operations_budget: &Cell<usize>,
