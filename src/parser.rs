@@ -1,4 +1,4 @@
-use crate::ast::{Term, Formula, Statement, Sort};
+use crate::ast::{Term, Formula, Statement, Sort, VarId};
 use crate::engine::Universe;
 use std::iter::Peekable;
 use std::vec::IntoIter;
