@@ -1469,7 +1469,7 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 ## Work plan
 
 ### 1. Mathematical language and theory files
-- [ ] Introduce explicit, readable declaration forms (`axiom`, `assume`/`given`, and eventually `definition`, `theorem`, and `lemma`) while retaining legacy declarations as compatibility syntax.
+- [x] Add canonical `axiom` and `assume`/`given` declaration forms while retaining legacy declarations as compatibility syntax. `definition`, `theorem`, and `lemma` remain future language work.
 - [ ] Make formula notation consistent and mathematical: quantifiers, connectives, equality, implication, function application, and infix operators.
 - [ ] Improve parser diagnostics with source positions, expected constructs, and actionable suggestions.
 - [ ] Establish a clear distinction between assumptions, axioms, definitions, derived propositions, and kernel-verified theorems.
@@ -1509,3 +1509,13 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - Confirmed the current declaration syntax is inconsistent (`Name : forall ...` versus capitalized `Given Name : ...`) and the proof formatter still renders logical connectives as English words.
 - Initial implementation slice: add canonical `axiom` and `assume` declaration keywords without removing compatibility syntax; shift REPL framing and proof feedback towards mathematical notation; introduce terminal-aware progress feedback; migrate bundled theory examples to the canonical declaration style.
 - No kernel, proof-search, or performance work is included in this UX effort.
+
+### 2026-11-07 — first implementation slice
+
+- [x] Added canonical `axiom Name : forall ...` and `assume Name : proposition` / `given Name : proposition` parser forms. Legacy `Name : forall ...` and `Given Name : ...` remain accepted.
+- [x] Added parser regressions for explicit axioms, named assumptions, and lowercase `given`.
+- [x] Migrated the bundled core logic and Euclidean geometry files to canonical `axiom` / `assume` declarations.
+- [x] Added a terminal presentation module with terminal detection, a mathematical turnstile prompt, a framed workspace heading, and an ASCII progress spinner that stays silent when stderr is redirected.
+- [x] Added colon-prefixed REPL command support, mathematical workspace help, `:context` / `:universes` aliases, and `:derive` as the mathematical-facing alias for forward deduction.
+- [x] Changed proof presentation to use `∧`, `∨`, `¬`, and `→`, and made successful proof output explicitly identify kernel checking.
+- [ ] Validation pending: maintainer should run `cargo test`, then load the bundled geometry theory and exercise the new REPL syntax. No test result is claimed yet.
