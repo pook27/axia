@@ -2247,3 +2247,47 @@ mod trail_structural_search_tests {
         assert_eq!(proof.sub_proofs[0].goal, pred("Q", constant("a")));
     }
 }
+
+
+#[cfg(test)]
+mod incremental_forward_index_tests {
+    use super::*;
+
+    #[test]
+    fn fact_index_accepts_new_facts_without_rebuilding() {
+        let p = Formula::Pred("P".into(), vec![Term::Const("a".into())]);
+        let q = Formula::Pred("Q".into(), vec![Term::Const("a".into())]);
+        let mut index = FactIndex::new(&HashMap::new());
+
+        assert!(index.candidates(&p).is_empty());
+        index.insert("p_second".into(), p.clone());
+        index.insert("p_first".into(), p.clone());
+        index.insert("p_first".into(), p.clone());
+        index.insert("q".into(), q.clone());
+
+        assert_eq!(
+            index.candidates(&p),
+            &["p_first".to_string(), "p_second".to_string()]
+        );
+        assert_eq!(index.candidates(&q), &["q".to_string()]);
+    }
+
+    #[test]
+    fn delta_heads_select_only_relevant_forward_rules_deterministically() {
+        let p = Formula::Pred("P".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let q = Formula::Pred("Q".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let r = Formula::Pred("R".into(), vec![Term::Var("x".into(), Sort::object())]);
+        let axioms = vec![
+            Axiom { name: "P_rule".into(), vars: vec![], premises: vec![p.clone()], conclusion: p.clone() },
+            Axiom { name: "Q_rule".into(), vars: vec![], premises: vec![q.clone()], conclusion: q.clone() },
+            Axiom { name: "R_rule".into(), vars: vec![], premises: vec![r.clone()], conclusion: r.clone() },
+        ];
+        let rules = ForwardAxiomIndex::new(&axioms);
+        let mut delta = FactIndex::new(&HashMap::new());
+        delta.insert("q".into(), q);
+        delta.insert("p".into(), p);
+
+        assert_eq!(rules.candidates(&delta), vec![0, 1]);
+        assert_eq!(rules.candidates(&FactIndex::new(&HashMap::new())), Vec::<usize>::new());
+    }
+}
