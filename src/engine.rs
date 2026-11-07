@@ -1144,7 +1144,7 @@ pub fn forward_deduce(
                             continue;
                         }
 
-                        let simplified = simp_formula(conclusion, &axioms);
+                        let simplified = simp_formula(conclusion, &axioms, &rewrite_index);
                         if known.insert(simplified.clone()) {
                             deduction_counter += 1;
                             new_this_step.push((
