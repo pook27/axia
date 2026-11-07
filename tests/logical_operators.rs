@@ -187,7 +187,7 @@ fn parses_nested_existentials() {
     assert_eq!(
         parse_formula("exists x, exists y, Related(x, y)"),
         Formula::Exists {
-            var: "x".to_string(),
+            var: VarId::from("x"),
             sort: Sort::object(),
             body: Box::new(Formula::Exists {
                 var: VarId::from("y"),
