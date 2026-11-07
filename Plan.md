@@ -1485,7 +1485,7 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 
 ### 3. Terminal experience
 - [x] Introduce a small terminal presentation layer with terminal detection and plain-output fallback.
-- [ ] Use aligned proof trees, Unicode/ASCII borders, concise status indicators, and restrained color.
+- [x] Add Unicode workspace framing and an ASCII mode (`AXIA_ASCII=1`); [ ] implement aligned proof-tree branches and consistent status styling.
 - [x] Add a lightweight ASCII progress spinner for proof search and deduction; it stays silent when stderr is redirected.
 - [ ] Respect terminal width, color support, and non-interactive/scripted execution.
 - [ ] Keep the interface fast, quiet, and accessible; animation must never obscure mathematical output.
@@ -1516,6 +1516,7 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - [x] Added parser regressions for explicit axioms, named assumptions, and lowercase `given`.
 - [x] Migrated the bundled core logic and Euclidean geometry files to canonical `axiom` / `assume` declarations.
 - [x] Added a terminal presentation module with terminal detection, a mathematical turnstile prompt, a framed workspace heading, and an ASCII progress spinner that stays silent when stderr is redirected.
+- [x] Added `AXIA_ASCII=1` to use ASCII workspace borders and a `|-` prompt on terminals without preferred Unicode rendering.
 - [x] Added colon-prefixed REPL command support, mathematical workspace help, `:context` / `:universes` aliases, and `:derive` as the mathematical-facing alias for forward deduction.
 - [x] Changed proof presentation to use `∧`, `∨`, `¬`, and `→`, and made successful proof output explicitly identify kernel checking.
 - [x] Updated the bundled core and Euclidean geometry theory files to use Unicode implication/connective notation (`→`, `∧`, `∨`, `¬`) alongside the new declaration forms.
