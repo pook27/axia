@@ -1214,10 +1214,6 @@ impl FactIndex {
         }
     }
 
-    fn contains_head(&self, head: &FormulaHead) -> bool {
-        self.by_head.contains_key(head)
-    }
-
     fn candidates(&self, formula: &Formula) -> &[String] {
         self.by_head.get(&formula_head(formula))
             .map(Vec::as_slice).unwrap_or(&[])
