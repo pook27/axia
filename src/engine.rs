@@ -997,6 +997,10 @@ pub fn forward_deduce(
     let rule_index = ForwardAxiomIndex::new(&axioms);
     let mut facts = universe.all_facts();
     let mut known: HashSet<Formula> = facts.values().cloned().collect();
+    // Build the complete-fact index once. New discoveries are inserted into
+    // it as they enter the database instead of re-indexing every old fact on
+    // every saturation round.
+    let mut known_index = FactIndex::new(&facts);
     let mut delta = facts.clone();
     let mut all_new = Vec::new();
     let mut deduction_counter = 0usize;
@@ -1008,7 +1012,6 @@ pub fn forward_deduce(
         }
 
         let delta_index = FactIndex::new(&delta);
-        let known_index = FactIndex::new(&facts);
         let mut new_this_step: Vec<(String, Formula)> = Vec::new();
 
         // Premise-free predicate axioms are facts in their own right. Process
@@ -1085,6 +1088,7 @@ pub fn forward_deduce(
         for (name, formula) in new_this_step {
             universe.add_derived(name.clone(), formula.clone());
             facts.insert(name.clone(), formula.clone());
+            known_index.insert(name.clone(), formula.clone());
             next_delta.insert(name.clone(), formula.clone());
             all_new.push((name, formula));
         }
@@ -1170,11 +1174,15 @@ impl ForwardAxiomIndex {
 
     fn candidates(&self, delta: &FactIndex) -> Vec<usize> {
         let mut candidates = Vec::new();
-        for (head, positions) in &self.by_premise_head {
-            if delta.contains_head(head) {
+        // Iterate the distinct heads that actually arrived in this delta,
+        // rather than scanning every head represented by every rule.
+        for head in delta.by_head.keys() {
+            if let Some(positions) = self.by_premise_head.get(head) {
                 candidates.extend_from_slice(positions);
             }
         }
+        // Hash-map key iteration is intentionally unordered; sort and dedupe
+        // to preserve deterministic rule exploration.
         candidates.sort_unstable();
         candidates.dedup();
         candidates
@@ -1191,13 +1199,19 @@ impl FactIndex {
     fn new(givens: &HashMap<String, Formula>) -> Self {
         let mut index = Self::default();
         for (name, formula) in givens {
-            index.by_head.entry(formula_head(formula))
-                .or_default().push(name.clone());
-        }
-        for names in index.by_head.values_mut() {
-            names.sort();
+            index.insert(name.clone(), formula.clone());
         }
         index
+    }
+
+    fn insert(&mut self, name: String, formula: Formula) {
+        let names = self.by_head.entry(formula_head(&formula)).or_default();
+        // Facts are inserted in deduction order, but keep this index's
+        // ordering invariant explicit for callers that build it from maps.
+        match names.binary_search(&name) {
+            Ok(_) => {}
+            Err(position) => names.insert(position, name),
+        }
     }
 
     fn contains_head(&self, head: &FormulaHead) -> bool {
