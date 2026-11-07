@@ -2,6 +2,7 @@ mod ast;
 mod parser;
 mod engine;
 mod kernel;
+mod terminal;
 
 use std::path::Path;
 use std::fs::{self, File};
@@ -226,13 +227,13 @@ impl ProofFormatter {
                 }
             }
             Formula::And(l, r) =>
-                format!("{} {} {}", self.fmt_formula(l), "AND".magenta().bold(), self.fmt_formula(r)),
+                format!("{} {} {}", self.fmt_formula(l), "∧".magenta().bold(), self.fmt_formula(r)),
             Formula::Or(l, r) =>
-                format!("{} {} {}", self.fmt_formula(l), "OR".magenta().bold(), self.fmt_formula(r)),
+                format!("{} {} {}", self.fmt_formula(l), "∨".magenta().bold(), self.fmt_formula(r)),
             Formula::Not(i) =>
-                format!("{} {}", "NOT".magenta().bold(), self.fmt_formula(i)),
+                format!("{}{}", "¬".magenta().bold(), self.fmt_formula(i)),
             Formula::Implies(l, r) =>
-                format!("{} {} {} {}", "IF".magenta().bold(), self.fmt_formula(l), "THEN".magenta().bold(), self.fmt_formula(r)),
+                format!("{} {} {}", self.fmt_formula(l), "→".magenta().bold(), self.fmt_formula(r)),
             Formula::Exists { var, sort, body } => {
                 let body_str = self.fmt_formula(body);
                 let e = "∃".magenta().bold();
@@ -262,11 +263,12 @@ fn explain_proof(step: &ProofStep) {
     let mut fmt = ProofFormatter::new();
     fmt.scan(step);
 
-    println!("\n{}", "--- Q.E.D. ---".green().bold());
+    println!("\n{}", "╭─ PROOF ─".green().bold());
     for def in &fmt.definitions { println!("{}", def); }
     if !fmt.definitions.is_empty() { println!(); }
 
     explain_recursive(step, 0, &fmt);
+    println!("\n{}", "✓ Q.E.D. — checked by the kernel".green().bold());
 }
 
 fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
@@ -323,7 +325,6 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
         for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
     }
 
-    if depth == 0 { println!("\n{}", "Q.E.D.".green().bold()); }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,29 +332,31 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
 // ---------------------------------------------------------------------------
 
 fn print_help() {
-    println!("Commands:");
-    println!("  create_universe <name>              Create a new empty universe");
-    println!("  use <name>                          Switch active universe");
-    println!("  list_universes                      List all universes");
-    println!("  universe_info                       Show contents of active universe");
-    println!("  import <name>                       Pull axioms from another universe into active");
-    println!("  load <file>                         Load a .axia file into active universe");
-    println!("  load <file> into <universe>         Load a file into a specific universe");
-    println!("  assert <formula>                    Add a trusted assumption to active universe");
-    println!("  Given <Name> : <formula>            Declare a named trusted assumption");
-    println!("  deduce <n>                          Derive facts without changing assumptions");
-    println!("  prove <formula>                     Prove a formula in active universe");
-    println!("  exit                                Quit");
+    println!("Workspace commands:");
+    println!("  :prove <proposition>               Ask Axia to establish a proposition");
+    println!("  :assume <Name> : <proposition>     Add a named trusted assumption");
+    println!("  :derive [rounds]                   Derive consequences of the current theory");
+    println!("  :context                            Inspect the active mathematical context");
+    println!("  :universes                          List available mathematical universes");
+    println!("  :use <name>                         Enter another universe");
+    println!("  :load <file>                        Read a .axia theory file");
+    println!("  :import <name>                      Import a bundled theory");
+    println!("  :help                               Show this guide");
+    println!("  :quit                               Leave the workspace");
     println!();
-    println!("Formula syntax:");
-    println!("  P(x, y)          predicate application");
-    println!("  f(x) = g(y)      equality");
-    println!("  A ∧ B  / A and B conjunctions");
-    println!("  A ∨ B  / A or B  disjunctions");
-    println!("  A → B  / A -> B  implication");
-    println!("  ¬ A    / not A   negation");
-    println!("  ∃ x, P(x)        existential (engine introduces Skolem witness)");
-    println!("  ∃ x : Sort, P(x) existential with sort annotation");
+    println!("Declarations:");
+    println!("  Point : Type");
+    println!("  On : Point → Line → Prop");
+    println!("  axiom Line_Through_Points : ∀ p q : Point, On(p, join(p, q))");
+    println!("  assume H : On(A, l)");
+    println!();
+    println!("Propositions:");
+    println!("  On(A, l)          predicate application");
+    println!("  f(A) = B          equality");
+    println!("  P ∧ Q              conjunction       P ∨ Q  disjunction");
+    println!("  P → Q              implication       ¬ P    negation");
+    println!("  ∀ x : Point, P(x)  universal quantification in axiom declarations");
+    println!("  ∃ x : Point, P(x)  existential quantification");
 }
 
 // ---------------------------------------------------------------------------
@@ -420,8 +423,11 @@ fn load_file(filename: &str, target_name: &str, session: &mut Session) -> Result
 }
 
 fn process_line(input: &str, session: &mut Session) {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.starts_with("--") { return; }
+    let raw = input.trim();
+    if raw.is_empty() || raw.starts_with("--") { return; }
+    // Colon-prefixed commands are the canonical REPL form. Legacy bare
+    // commands remain accepted so existing scripts continue to work.
+    let trimmed = raw.strip_prefix(':').unwrap_or(raw);
 
     if trimmed == "help" || trimmed == "?" { print_help(); return; }
 
@@ -450,7 +456,7 @@ fn process_line(input: &str, session: &mut Session) {
         return;
     }
 
-    if trimmed == "list_universes" {
+    if trimmed == "list_universes" || trimmed == "universes" {
         let mut names: Vec<&String> = session.universes.keys().collect();
         names.sort();
         for name in names {
@@ -460,7 +466,7 @@ fn process_line(input: &str, session: &mut Session) {
         return;
     }
 
-    if trimmed == "universe_info" {
+    if trimmed == "universe_info" || trimmed == "context" {
         let u = session.current();
         println!("Active universe: '{}'", session.active);
         let types_str = if u.types.is_empty() { "(none)".to_string() } else { u.types.join(", ") };
@@ -550,8 +556,11 @@ fn process_line(input: &str, session: &mut Session) {
         let mut parser = Parser::with_universe(tokens, Some(session.current()));
         match parser.parse_formula_complete() {
             Ok(goal) => {
-                println!("{} {}  [universe: '{}']", "Goal:".blue().bold(), goal.to_string().cyan(), session.active.yellow());
-                match prove_checked(&goal, session.current(), 20) {
+                println!("{} {}  [in {}]", "⊢".magenta().bold(), goal.to_string().cyan(), session.active.yellow());
+                let result = terminal::with_spinner("Searching for a derivation", || {
+                    prove_checked(&goal, session.current(), 20)
+                });
+                match result {
                     Ok(Some(proof)) => explain_proof(&proof),
                     Ok(None) => println!("{}", "No proof found.".red().bold()),
                     Err(error) => println!("{}", format!("Type error: {}", error).red()),
@@ -599,7 +608,7 @@ fn process_line(input: &str, session: &mut Session) {
     // and recording the conclusions as new named deductions.
     // -----------------------------------------------------------------------
 
-    if let Some(rest) = trimmed.strip_prefix("deduce") {
+    if let Some(rest) = trimmed.strip_prefix("derive").or_else(|| trimmed.strip_prefix("deduce")) {
         // Accept both `deduce` (default 1 step) and `deduce <n>`.
         let steps: u32 = rest.trim().parse().unwrap_or(1).max(1);
 
@@ -609,7 +618,9 @@ fn process_line(input: &str, session: &mut Session) {
             format!("[universe: '{}']", session.active).yellow(),
         );
 
-        let discoveries = forward_deduce(session.current_mut(), steps);
+        let discoveries = terminal::with_spinner("Deriving consequences", || {
+            forward_deduce(session.current_mut(), steps)
+        });
 
         if discoveries.is_empty() {
             println!("{}", "  No new facts discovered (fixpoint reached).".bright_black());
@@ -708,16 +719,15 @@ fn main() {
     let mut rl = DefaultEditor::new().expect("Failed to init readline");
     let _ = rl.load_history(".axia_history");
 
-    println!("{}", "\n--- Axia Kernel v0.9 ---".yellow().bold());
-    println!("Active universe: 'default'  |  type `help` for commands");
+    terminal::print_banner(&session.active);
 
     loop {
-        let prompt = format!("[{}]> ", session.active);
+        let prompt = terminal::prompt(&session.active);
         match rl.readline(&prompt) {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
                 let t = line.trim();
-                if t == "exit" { 
+                if t == "exit" || t == ":quit" || t == ":q" { 
                     let _ = rl.save_history(".axia_history");
                     break; 
                 }
