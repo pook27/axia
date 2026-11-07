@@ -263,68 +263,58 @@ fn explain_proof(step: &ProofStep) {
     let mut fmt = ProofFormatter::new();
     fmt.scan(step);
 
-    println!("\n{}", "╭─ PROOF ─".green().bold());
-    for def in &fmt.definitions { println!("{}", def); }
+    println!("\n{}", "╭─ DERIVATION ─".green().bold());
+    for def in &fmt.definitions { println!("  {}", def); }
     if !fmt.definitions.is_empty() { println!(); }
 
-    explain_recursive(step, 0, &fmt);
+    explain_recursive(step, "", true, &fmt);
     println!("\n{}", "✓ Q.E.D. — checked by the kernel".green().bold());
 }
 
-fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
-    // Dim the tree branches so they fade into the background
-    let branch = if depth == 0 {
-        String::new()
-    } else {
-        format!("{}└─ ", "   ".repeat(depth - 1)).bright_black().to_string()
-    };
-    
-    // Colorize the components
-    let turnstile = "⊢".magenta().bold();
+/// Render proof nodes as a connected tree. The prefix records which ancestor
+/// branches still have siblings, so multi-premise derivations stay aligned.
+fn explain_recursive(step: &ProofStep, prefix: &str, is_last: bool, fmt: &ProofFormatter) {
     let goal_text = fmt.fmt_formula(&step.goal);
     let rule_label = ProofFormatter::clean_rule_name(step.rule.label()).yellow();
+    let connector = if prefix.is_empty() { "" } else if is_last { "└── " } else { "├── " };
+    let continuation = if prefix.is_empty() { String::new() } else if is_last { "    " } else { "│   " };
+    let node_prefix = format!("{prefix}{connector}");
 
     if !step.witnesses.is_empty() {
-        // Existential Instantiation step
-        println!("{}Prove: {}", branch, goal_text);
+        println!("{}{} {}", node_prefix, "∃".magenta().bold(), goal_text);
         for (var, term) in &step.witnesses {
             let term_str = fmt.fmt_term(term).green().bold();
             let is_abstract = matches!(term, ast::Term::Var(n, _) if ast::variable_display_name(n).starts_with("?w"));
-            let prefix = format!("{}   ", "   ".repeat(depth)).bright_black();
-            
             if is_abstract {
-                println!("{}↳ Let {} be an abstract variable.", prefix, var.to_string().bold());
+                println!("{}{} Let {} be an arbitrary object.", prefix, continuation, var);
             } else {
-                println!("{}↳ Construct {} := {}", prefix, var.to_string().bold(), term_str);
+                println!("{}{} Choose {} := {}.", prefix, continuation, var, term_str);
             }
         }
-        for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
-
     } else if step.sub_proofs.is_empty() {
-        // Base case — no sub-proofs: axiom/given/deduction leaf.
-        if let engine::ProofRule::Given(hyp) = &step.rule {
-            // Named hypothesis or deduction used as a direct fact.
-            let hyp = hyp.as_str();
-            println!("{}{} {} {}",
-                branch,
-                goal_text,
-                "(by hypothesis".bright_black(),
-                format!("{})", hyp).bright_black());
-        } else if matches!(&step.rule, engine::ProofRule::Axiom(..)) && step.rule.label().starts_with("Fact") {
-            println!("{}{} {}", branch, goal_text, "(asserted fact)".bright_black());
-        } else {
-            println!("{}{} (via {})", branch, goal_text, rule_label);
+        match &step.rule {
+            engine::ProofRule::Given(hyp) => {
+                println!("{}{}  {}", node_prefix, goal_text, format!("(given {hyp})").bright_black());
+            }
+            engine::ProofRule::Axiom(..) if step.rule.label().starts_with("Fact") => {
+                println!("{}{}  {}", node_prefix, goal_text, "(known consequence)".bright_black());
+            }
+            _ => println!("{}{}  {}", node_prefix, goal_text, format!("(by {rule_label})").bright_black()),
         }
-    } else if step.rule == engine::ProofRule::ConjunctionIntroduction {
-        // Conjunctions
-        println!("{}{} {}  {}", branch, turnstile, goal_text, "[Requires both:]".bright_black());
-        for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
     } else {
-        // Standard implication step
-        println!("{}{} {}  (apply {})", branch, turnstile, goal_text, rule_label);
-        for sub in &step.sub_proofs { explain_recursive(sub, depth + 1, fmt); }
+        let explanation = if step.rule == engine::ProofRule::ConjunctionIntroduction {
+            "both propositions follow".to_string()
+        } else {
+            format!("by {rule_label}")
+        };
+        println!("{}{} {}  {}", node_prefix, "⊢".magenta().bold(), goal_text, format!("({explanation})").bright_black());
     }
 
+    let child_prefix = format!("{prefix}{continuation}");
+    let count = step.sub_proofs.len();
+    for (index, sub) in step.sub_proofs.iter().enumerate() {
+        explain_recursive(sub, &child_prefix, index + 1 == count, fmt);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +345,7 @@ fn print_help() {
     println!("  f(A) = B          equality");
     println!("  P ∧ Q              conjunction       P ∨ Q  disjunction");
     println!("  P → Q              implication       ¬ P    negation");
-    println!("  ∀ x : Point, P(x)  universal quantification in axiom declarations");
+    println!("  ∀ x : Point, P(x)  universal quantification");
     println!("  ∃ x : Point, P(x)  existential quantification");
 }
 
@@ -468,12 +458,16 @@ fn process_line(input: &str, session: &mut Session) {
 
     if trimmed == "universe_info" || trimmed == "context" {
         let u = session.current();
-        println!("Active universe: '{}'", session.active);
+        println!("\n{}", format!("Mathematical context · {}", session.active).bold());
         let types_str = if u.types.is_empty() { "(none)".to_string() } else { u.types.join(", ") };
         let preds_str = if u.predicates.is_empty() {
             "(none)".to_string()
         } else {
-            u.predicates.keys().cloned().collect::<Vec<_>>().join(", ")
+            let mut entries: Vec<String> = u.predicates.iter()
+                .map(|(name, signature)| format!("{} : {}", name, signature))
+                .collect();
+            entries.sort();
+            entries.join("\n    ")
         };
         let consts_str = if u.constants.is_empty() {
             "(none)".to_string()
@@ -485,10 +479,10 @@ fn process_line(input: &str, session: &mut Session) {
             pairs.sort();
             pairs.join(", ")
         };
-        println!("  Types      : {}", types_str);
-        println!("  Constants  : {}", consts_str);
-        println!("  Predicates : {}", preds_str);
-        println!("  Axioms ({}):", u.axioms.len());
+        println!("  Sorts                 {}", types_str);
+        println!("  Named objects         {}", consts_str);
+        println!("  Relations & functions {}", preds_str);
+        println!("  Axioms ({})", u.axioms.len());
         for ax in &u.axioms {
             if ax.premises.is_empty() {
                 println!("    [{}] ⊢ {}", ax.name, ax.conclusion);
@@ -498,7 +492,7 @@ fn process_line(input: &str, session: &mut Session) {
             }
         }
         if !u.assumptions.is_empty() {
-            println!("  Trusted assumptions ({}):", u.assumptions.len());
+            println!("  Assumptions ({})", u.assumptions.len());
             let mut pairs: Vec<(&String, &Formula)> = u.assumptions.iter().collect();
             pairs.sort_by_key(|(n, _)| n.as_str());
             for (name, formula) in pairs {
@@ -506,7 +500,7 @@ fn process_line(input: &str, session: &mut Session) {
             }
         }
         if !u.derived.is_empty() {
-            println!("  Derived facts ({}):", u.derived.len());
+            println!("  Consequences ({})", u.derived.len());
             let mut pairs: Vec<(&String, &Formula)> = u.derived.iter().collect();
             pairs.sort_by_key(|(n, _)| n.as_str());
             for (name, formula) in pairs {
@@ -657,11 +651,11 @@ fn process_line(input: &str, session: &mut Session) {
     match parsed {
         Some(Statement::TypeDecl(n)) => {
             session.current_mut().add_type(n.clone());
-            println!("{} {}", "Defined Type:".yellow(), n.cyan().bold());
+            println!("{} {}", "Introduced sort".green().bold(), n.cyan().bold());
         }
         Some(Statement::ConstDecl(n, sort)) => {
             session.current_mut().add_constant(n.clone(), sort.clone());
-            println!("{} {} : {}", "Defined Constant:".yellow(), n.cyan().bold(), sort.to_string().cyan());
+            println!("{} {} : {}", "Named object".green().bold(), n.cyan().bold(), sort.to_string().cyan());
         }
         Some(Statement::PredDecl(n, arg_sorts, ret_sort)) => {
             let arg_strs: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
@@ -669,7 +663,7 @@ fn process_line(input: &str, session: &mut Session) {
             
             let sig: Vec<String> = arg_sorts.iter().map(|s| s.to_string()).collect();
             let sig_str = if sig.is_empty() { "".to_string() } else { format!(" : {} → ", sig.join(" → ")) };
-            println!("{} {}{}{}", "Defined Function/Predicate:".yellow(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
+            println!("{} {}{}{}", "Signature established".green().bold(), n.cyan().bold(), sig_str, ret_sort.to_string().cyan());
         }
         Some(Statement::AxiomDecl { name, vars, body }) => {
             let vars_pure: Vec<VarId> = vars.iter().map(|(n, _)| n.clone()).collect();
@@ -677,7 +671,7 @@ fn process_line(input: &str, session: &mut Session) {
             
             let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", ast::variable_display_name(v).cyan(), s.to_string().cyan())).collect();
             let vars_display = if var_strs.is_empty() { "".to_string() } else { format!(" [∀ {}]", var_strs.join(", ")) };
-            println!("{} {}{}", "Added Axiom:".yellow(), name.yellow().bold(), vars_display.bright_black());
+            println!("{} {}{}", "Axiom admitted".green().bold(), name.yellow().bold(), vars_display.bright_black());
         }
         Some(Statement::Import(src)) => {
             if let Err(e) = resolve_and_load(&src, session) {
@@ -687,7 +681,7 @@ fn process_line(input: &str, session: &mut Session) {
         Some(Statement::GivenDecl(name, formula)) => {
             session.current_mut().add_given(name.clone(), formula.clone());
             println!("{} {}",
-                "Added Given:".green().bold(),
+                "Assumption recorded".green().bold(),
                 name.cyan().bold());
         }
         None => println!("{}", format!("Parse error: {}", trimmed).red()),
