@@ -1458,3 +1458,12 @@ The existing search engine remains a proof-discovery component. It is not part o
   - Forward deduction, 8 distractors: 108.37 µs → 87.71 µs; 32: 395.44 µs → 434.59 µs; 128: 1.8175 ms → 1.7215 ms. These mixed results do not establish a systematic regression, and this PR does not modify the forward-deduction path.
 - Criterion's 128-distractor proof-search run on the PR branch warned that 50 samples exceeded the 20-second target. Treat the direction and scale of the improvement as promising, while recognizing that this workload needs a longer measurement window for a cleaner estimate.
 - The PR branch is two commits ahead of `main` and has no base-branch divergence.
+
+
+## Performance phase — indexed term rewriting (in progress)
+
+- [ ] Build a per-operation index of unconditional equational rewrite rules by the outer shape of each left-hand side.
+- [ ] Preserve original axiom order, including variable-headed wildcard rules, so simplification semantics remain unchanged.
+- [ ] Reuse the index throughout a complete proof or forward-deduction run instead of rescanning every axiom for every term.
+- [ ] Add regression tests and a Criterion workload with increasing numbers of irrelevant rewrite rules.
+- [ ] Compare the new workload and existing proof/forward benchmarks against the pre-change baseline before recording measured gains.
