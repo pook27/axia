@@ -1411,3 +1411,15 @@ The existing search engine remains a proof-discovery component. It is not part o
   - 128 distractors: 1.4192 ms median, 88.960% faster.
 - Proof-search benchmarks in the same run regressed by approximately 5–7% at all three sizes. This change does not modify the backward proof-search implementation, so that result is recorded for investigation rather than attributed to the forward-index change.
 - The optimization is validated for correctness and shows substantial measured gains in forward deduction.
+
+
+## Sprint 1 final item — typed variable identities (implementation in review)
+
+- Added an opaque `VarId` newtype to the AST. Variable identity is now a distinct type rather than an ordinary `String`; its payload is private and source-level spelling is exposed only through the display boundary.
+- Migrated `Term::Var`, existential binders, and parsed axiom-variable declarations to carry `VarId`.
+- Migrated substitution maps and rollback-trail keys to `VarId`, including unification, occurs checks, capture avoidance, and alpha-renaming.
+- Axiom instantiation now derives fresh typed identities, and proof-object existential witnesses carry `VarId`.
+- The kernel's existential substitutions and explicit axiom-instantiation validation now consume the typed identities.
+- Parser scopes and free-variable interning now store `VarId`; nested shadowing still receives distinct identities while repeated free-variable occurrences share one identity within a parser.
+- Added AST regressions for fresh identity uniqueness and stable display names across derived instances.
+- **Validation status:** implementation is on `logic/typed-varid-sprint-one`; the Rust toolchain is unavailable in the editing environment, so this migration has not yet been compiled or tested here. Keep the Sprint 1 checkbox open until the maintainer runs `cargo test` (and `cargo fmt --check`, if rustfmt is installed) against this branch.
