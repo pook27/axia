@@ -13,10 +13,23 @@ impl fmt::Display for Sort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
 }
 
+/// Return the source-level spelling of an internally unique variable key.
+/// Keys are intentionally opaque to the logic engine; only formatters should
+/// call this helper.
+pub fn variable_display_name(key: &str) -> &str {
+    let key = key.split_once("__instance").map_or(key, |(base, _)| base);
+    let key = key.split_once("__alpha").map_or(key, |(base, _)| base);
+    key.strip_prefix("__axia_var_")
+        .and_then(|rest| rest.split_once("__").map(|(_, name)| name))
+        .unwrap_or(key)
+}
+
 /// A term in the object language.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
-    /// A logic variable (unknown), carrying its declared sort.
+    /// A logic variable (unknown), carrying an opaque identity key and sort.
+    /// Parser-created keys include a globally unique ID; the source spelling
+    /// is recovered only by `variable_display_name` for user-facing output.
     Var(String, Sort),
     /// A ground constant.
     Const(String),
@@ -76,7 +89,7 @@ pub enum Statement {
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var(name, _sort) => write!(f, "{}", name),
+            Term::Var(name, _sort) => write!(f, "{}", variable_display_name(name)),
             Term::Const(name)      => write!(f, "{}", name),
             Term::Apply(name, args) => {
                 write!(f, "{}(", name)?;
@@ -108,9 +121,9 @@ impl fmt::Display for Formula {
             Formula::Implies(l, r)  => write!(f, "({}) → ({})", l, r),
             Formula::Exists { var, sort, body } => {
                 if sort == &Sort::object() {
-                    write!(f, "∃ {}, {}", var, body)
+                    write!(f, "∃ {}, {}", variable_display_name(var), body)
                 } else {
-                    write!(f, "∃ {} : {}, {}", var, sort, body)
+                    write!(f, "∃ {} : {}, {}", variable_display_name(var), sort, body)
                 }
             }
         }
