@@ -5,7 +5,7 @@
 //! the active logical context. A successful search result is only a candidate
 //! until it passes this checker.
 
-use crate::ast::{Formula, VarId};
+use crate::ast::Formula;
 use crate::engine::{ProofRule, ProofStep, Universe};
 use std::collections::HashMap;
 
