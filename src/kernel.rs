@@ -345,6 +345,14 @@ mod tests {
         Formula::Pred(name.into(), vec![])
     }
 
+    fn declare_predicate(universe: &mut Universe, name: &str, argument_sorts: &[&str]) {
+        universe.add_predicate(
+            name.into(),
+            argument_sorts.iter().map(|sort| (*sort).into()).collect(),
+            "Prop".into(),
+        );
+    }
+
     fn leaf(goal: Formula, rule: ProofRule) -> ProofStep {
         ProofStep {
             goal,
@@ -373,6 +381,7 @@ mod tests {
     #[test]
     fn accepts_a_named_assumption() {
         let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &[]);
         universe.add_given("P_fact".into(), pred("P"));
         let proof = leaf(pred("P"), ProofRule::Given("P_fact".into()));
         check_proof(&proof, &universe).unwrap();
@@ -381,6 +390,8 @@ mod tests {
     #[test]
     fn checks_both_sides_of_conjunction() {
         let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &[]);
+        declare_predicate(&mut universe, "Q", &[]);
         universe.assumptions.insert("p".into(), pred("P"));
         universe.assumptions.insert("q".into(), pred("Q"));
         let proof = ProofStep {
@@ -407,6 +418,8 @@ mod tests {
     #[test]
     fn checks_axiom_conclusion_and_every_premise() {
         let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &[]);
+        declare_predicate(&mut universe, "Q", &[]);
         universe.add_axiom(Axiom {
             name: "P_to_Q".into(),
             vars: vec![],
@@ -430,6 +443,8 @@ mod tests {
     #[test]
     fn checks_explicit_axiom_instantiations_against_conclusion_and_premises() {
         let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &["Object"]);
+        declare_predicate(&mut universe, "Q", &["Object"]);
         let x = Term::Var("x".into(), crate::ast::Sort::object());
         let alice = Term::Const("alice".into());
         let p_x = Formula::Pred("P".into(), vec![x.clone()]);
@@ -482,6 +497,8 @@ mod tests {
     #[test]
     fn proof_search_records_the_axiom_instantiation_for_the_kernel() {
         let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &["Object"]);
+        declare_predicate(&mut universe, "Q", &["Object"]);
         let x = Term::Var("x".into(), crate::ast::Sort::object());
         let alice = Term::Const("alice".into());
         universe.add_axiom(Axiom {
@@ -510,7 +527,8 @@ mod tests {
 
     #[test]
     fn rejects_unknown_axioms_and_false_reflexivity() {
-        let universe = Universe::new();
+        let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &[]);
         assert!(check_proof(
             &leaf(pred("P"), ProofRule::Axiom("TrustMe".into(), HashMap::new())),
             &universe,
@@ -525,4 +543,118 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn kernel_goal_checks_do_not_treat_unification_as_proof() {
+        let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &["Object"]);
+        universe.add_constant("a".into(), Sort::object());
+        let a = Term::Const("a".into());
+        let x = Term::Var(VarId::fresh("x"), Sort::object());
+        let concrete = Formula::Pred("P".into(), vec![a.clone()]);
+        let general = Formula::Pred("P".into(), vec![x]);
+
+        universe.add_given("p_a".into(), concrete.clone());
+        let concrete_proof = leaf(concrete, ProofRule::Given("p_a".into()));
+        assert!(check_proof_for_goal(&concrete_proof, &general, &universe).is_err());
+
+        let forged_general = leaf(general.clone(), ProofRule::Given("p_a".into()));
+        assert!(check_proof_for_goal(&forged_general, &general, &universe).is_err());
+    }
+
+    #[test]
+    fn kernel_goal_checks_accept_alpha_equivalent_quantifiers() {
+        let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &["Object"]);
+        let left_var = VarId::fresh("x");
+        let right_var = VarId::fresh("y");
+        let left = Formula::Exists {
+            var: left_var.clone(),
+            sort: Sort::object(),
+            body: Box::new(Formula::Pred(
+                "P".into(),
+                vec![Term::Var(left_var, Sort::object())],
+            )),
+        };
+        let right = Formula::Exists {
+            var: right_var.clone(),
+            sort: Sort::object(),
+            body: Box::new(Formula::Pred(
+                "P".into(),
+                vec![Term::Var(right_var, Sort::object())],
+            )),
+        };
+        universe.add_given("exists_p".into(), left.clone());
+        let proof = leaf(left, ProofRule::Given("exists_p".into()));
+        check_proof_for_goal(&proof, &right, &universe).unwrap();
+    }
+
+    #[test]
+    fn rejects_existential_witness_with_wrong_sort() {
+        let mut universe = Universe::new();
+        declare_predicate(&mut universe, "P", &["Point"]);
+        let point = Sort("Point".into());
+        let line = Sort("Line".into());
+        let binder = VarId::fresh("x");
+        let witness = Term::Var(VarId::fresh("wrong"), line);
+        let goal = Formula::Exists {
+            var: binder.clone(),
+            sort: point.clone(),
+            body: Box::new(Formula::Pred(
+                "P".into(),
+                vec![Term::Var(binder.clone(), point)],
+            )),
+        };
+        let child_goal = match &goal {
+            Formula::Exists { body, var, .. } => body.substitute(&HashMap::from([
+                (var.clone(), witness.clone()),
+            ])),
+            _ => unreachable!(),
+        };
+        let proof = ProofStep {
+            goal,
+            rule: ProofRule::ExistentialIntroduction,
+            sub_proofs: vec![leaf(child_goal, ProofRule::Given("not_reached".into()))],
+            witnesses: vec![(binder, witness)],
+        };
+        let error = check_proof(&proof, &universe).unwrap_err();
+        assert!(error.message.contains("witness has sort Line"));
+    }
+
+    #[test]
+    fn existential_witness_substitution_avoids_capturing_nested_binders() {
+        let mut universe = Universe::new();
+        declare_predicate(&mut universe, "R", &["Point", "Point"]);
+        let point = Sort("Point".into());
+        let outer = VarId::fresh("x");
+        let nested = VarId::fresh("y");
+        let witness = Term::Var(nested.clone(), point.clone());
+        let nested_body = Formula::Pred(
+            "R".into(),
+            vec![
+                Term::Var(outer.clone(), point.clone()),
+                Term::Var(nested.clone(), point.clone()),
+            ],
+        );
+        let body = Formula::Exists {
+            var: nested.clone(),
+            sort: point.clone(),
+            body: Box::new(nested_body),
+        };
+        let goal = Formula::Exists {
+            var: outer.clone(),
+            sort: point,
+            body: Box::new(body.clone()),
+        };
+        let instantiated = body.substitute(&HashMap::from([(outer.clone(), witness.clone())]));
+        universe.add_given("witness_instance".into(), instantiated.clone());
+        let proof = ProofStep {
+            goal,
+            rule: ProofRule::ExistentialIntroduction,
+            sub_proofs: vec![leaf(instantiated, ProofRule::Given("witness_instance".into()))],
+            witnesses: vec![(outer, witness)],
+        };
+        check_proof(&proof, &universe).unwrap();
+    }
+
 }
