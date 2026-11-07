@@ -338,7 +338,6 @@ fn check_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Term;
     use crate::engine::{Axiom, ProofRule, ProofStep};
 
     fn pred(name: &str) -> Formula {
