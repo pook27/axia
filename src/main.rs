@@ -184,9 +184,9 @@ impl ProofFormatter {
         
         match t {
             ast::Term::Var(name, sort) if sort != &Sort::object() => {
-                format!("{}:{}", name.cyan().bold(), sort.to_string().cyan().bold())
+                format!("{}:{}", ast::variable_display_name(name).cyan().bold(), sort.to_string().cyan().bold())
             }
-            ast::Term::Var(name, _)  => name.cyan().bold().to_string(),
+            ast::Term::Var(name, _)  => ast::variable_display_name(name).cyan().bold().to_string(),
             ast::Term::Const(name)   => name.cyan().bold().to_string(),
             ast::Term::Apply(name, args) => {
                 let fa: Vec<String> = args.iter().map(|a| self.fmt_term(a)).collect();
@@ -237,9 +237,9 @@ impl ProofFormatter {
                 let body_str = self.fmt_formula(body);
                 let e = "∃".magenta().bold();
                 if sort == &Sort::object() {
-                    format!("{} {}, {}", e, var.cyan().bold(), body_str)
+                    format!("{} {}, {}", e, ast::variable_display_name(var).cyan().bold(), body_str)
                 } else {
-                    format!("{} {} : {}, {}", e, var.cyan().bold(), sort.to_string().cyan().bold(), body_str)
+                    format!("{} {} : {}, {}", e, ast::variable_display_name(var).cyan().bold(), sort.to_string().cyan().bold(), body_str)
                 }
             }
         }
@@ -287,7 +287,7 @@ fn explain_recursive(step: &ProofStep, depth: usize, fmt: &ProofFormatter) {
         println!("{}Prove: {}", branch, goal_text);
         for (var, term) in &step.witnesses {
             let term_str = fmt.fmt_term(term).green().bold();
-            let is_abstract = matches!(term, ast::Term::Var(n, _) if n.starts_with("?w"));
+            let is_abstract = matches!(term, ast::Term::Var(n, _) if ast::variable_display_name(n).starts_with("?w"));
             let prefix = format!("{}   ", "   ".repeat(depth)).bright_black();
             
             if is_abstract {
@@ -664,7 +664,7 @@ fn process_line(input: &str, session: &mut Session) {
             let vars_pure: Vec<String> = vars.iter().map(|(n, _)| n.clone()).collect();
             add_axiom(name.clone(), vars_pure, body, session.current_mut());
             
-            let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", v.cyan(), s.to_string().cyan())).collect();
+            let var_strs: Vec<String> = vars.iter().map(|(v, s)| format!("{}:{}", ast::variable_display_name(v).cyan(), s.to_string().cyan())).collect();
             let vars_display = if var_strs.is_empty() { "".to_string() } else { format!(" [∀ {}]", var_strs.join(", ")) };
             println!("{} {}{}", "Added Axiom:".yellow(), name.yellow().bold(), vars_display.bright_black());
         }
