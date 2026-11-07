@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use parser::{lex_checked, Parser};
-use ast::{Statement, Formula, Sort};
+use ast::{Statement, Formula, Sort, VarId};
 use engine::{Axiom, Universe, ProofStep, prove_checked, forward_deduce};
 use colored::Colorize;
 // ---------------------------------------------------------------------------
