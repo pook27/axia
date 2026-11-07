@@ -1396,3 +1396,12 @@ The existing search engine remains a proof-discovery component. It is not part o
 - The kernel no longer derives an axiom substitution by unifying the conclusion with the claimed goal. It applies the supplied substitution to the axiom conclusion and every premise, checks the conclusion exactly, and rejects substitution keys not declared by the axiom.
 - Added adversarial tests for undeclared substitution keys and mismatched premises, plus an end-to-end test that checks proof search records an instantiation accepted by the kernel.
 - The maintainer should run `cargo test` before this change is merged.
+
+**Incremental semi-naive forward indexes — implementation ready for validation**
+
+- The complete known-fact index is now built once at the start of saturation instead of being reconstructed from every known fact on every deduction round.
+- Newly derived facts are inserted into that index as they enter the fact database.
+- Forward-rule candidate selection now iterates the distinct formula heads in the current delta and looks up only those heads in the rule index, rather than scanning every indexed premise head.
+- Candidate rule positions are still sorted and deduplicated, preserving deterministic rule exploration despite hash-map iteration order.
+- Added focused regressions for incremental fact insertion, duplicate insertion, sorted fact names, and delta-driven rule selection.
+- This is an algorithmic reduction in repeated index work; its actual runtime impact must be confirmed with the existing Criterion forward-deduction benchmarks at sizes 8, 32 and 128. Do not record a speedup until those measurements are available.
