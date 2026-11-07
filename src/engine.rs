@@ -45,7 +45,7 @@ pub struct ProofStep {
     /// Sub-goals that had to be proved to discharge this goal.
     pub sub_proofs: Vec<ProofStep>,
     /// Existential witnesses introduced at this step (may be empty).
-    pub witnesses: Vec<(String, Term)>,
+    pub witnesses: Vec<(VarId, Term)>,
 }
 
 impl ProofStep {
