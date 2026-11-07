@@ -1479,13 +1479,13 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 ### 2. Mathematical REPL
 - [x] Replace the programmer-oriented prompt/header with a mathematical workspace and turnstile prompt.
 - [x] Add colon-prefixed workspace commands, mathematical help, and initial aliases (`:context`, `:universes`, `:derive`); completion and richer contextual discovery remain open.
-- [x] Present goals and logical connectives using mathematical notation and identify kernel-checked proofs; [ ] improve proof-tree structure and context presentation.
-- [ ] Give clear, consistent feedback for accepted declarations, failed parsing, unknown names, unproved goals, and verified proofs.
+- [x] Present goals and logical connectives using mathematical notation, identify kernel-checked proofs, render connected proof trees, and organize the active context in mathematical terms.
+- [ ] Give clear, consistent feedback for failed parsing, unknown names, and unproved goals; [x] make successful declarations use mathematical language and distinguish kernel-verified proofs.
 - [ ] Add multi-line input and continuation for declarations and proofs that span lines.
 
 ### 3. Terminal experience
 - [x] Introduce a small terminal presentation layer with terminal detection and plain-output fallback.
-- [x] Add Unicode workspace framing and an ASCII mode (`AXIA_ASCII=1`); [ ] implement aligned proof-tree branches and consistent status styling.
+- [x] Add Unicode workspace framing and an ASCII mode (`AXIA_ASCII=1`), and implement connected proof-tree branches; [ ] finish terminal-width handling and consistent status styling.
 - [x] Add a lightweight ASCII progress spinner for proof search and deduction; it stays silent when stderr is redirected.
 - [ ] Respect terminal width, color support, and non-interactive/scripted execution.
 - [ ] Keep the interface fast, quiet, and accessible; animation must never obscure mathematical output.
@@ -1521,4 +1521,11 @@ The redesign applies consistently to interactive use and `.axia` theory files. E
 - [x] Changed proof presentation to use `∧`, `∨`, `¬`, and `→`, and made successful proof output explicitly identify kernel checking.
 - [x] Updated the bundled core and Euclidean geometry theory files to use Unicode implication/connective notation (`→`, `∧`, `∨`, `¬`) alongside the new declaration forms.
 - [ ] Next: replace the current proof-tree indentation with a proper aligned branch renderer and make output width-aware.
+### 2026-11-07 — second UX slice
+- [x] Replaced the disconnected indentation in proof explanations with connected `├──` / `└──` derivation branches.
+- [x] Reframed `:context` as a mathematical context: sorts, named objects, relations/functions, axioms, assumptions, and consequences. Function and relation signatures are displayed rather than only their names.
+- [x] Simplified the repeated input prompt to `⊢` (or `|-` in ASCII mode); the active universe remains visible in the workspace heading and context.
+- [x] Changed successful declaration feedback to mathematical language (introduced sort, named object, signature established, axiom admitted, assumption recorded).
+- [x] Corrected the help text so universal quantification is not presented as exclusive to axiom declarations.
+- [ ] Validation pending: run `cargo test` and exercise a proof with multiple premises, `:context`, both prompt modes, and bundled theory loading. No test result is claimed yet.
 - [ ] Validation pending: maintainer should run `cargo test`, then load the bundled geometry theory and exercise the new REPL syntax. No test result is claimed yet.
