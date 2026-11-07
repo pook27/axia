@@ -5,7 +5,7 @@
 //! the active logical context. A successful search result is only a candidate
 //! until it passes this checker.
 
-use crate::ast::Formula;
+use crate::ast::{Formula, Sort, Term, VarId};
 use crate::engine::{ProofRule, ProofStep, Universe};
 use std::collections::HashMap;
 
@@ -44,7 +44,7 @@ pub fn check_proof_for_goal(
     requested_goal: &Formula,
     universe: &Universe,
 ) -> Result<(), KernelError> {
-    if proof.goal.unify(requested_goal).is_none() {
+    if !formulas_alpha_equivalent(&proof.goal, requested_goal) {
         return Err(KernelError::at(
             &[],
             format!(
@@ -56,12 +56,102 @@ pub fn check_proof_for_goal(
     check_proof(proof, universe)
 }
 
+
+/// Compare formulas modulo renaming of bound variables. Free variables retain
+/// their identity: unification is deliberately not sufficient for a kernel
+/// goal check because it could turn a proof of P(a) into a proof of P(x).
+fn formulas_alpha_equivalent(left: &Formula, right: &Formula) -> bool {
+    fn terms(
+        left: &Term,
+        right: &Term,
+        bound: &[(VarId, VarId)],
+    ) -> bool {
+        match (left, right) {
+            (Term::Var(left_id, left_sort), Term::Var(right_id, right_sort)) => {
+                if left_sort != right_sort {
+                    return false;
+                }
+                let left_binding = bound.iter().rev().find(|(id, _)| id == left_id);
+                let right_binding = bound.iter().rev().find(|(_, id)| id == right_id);
+                match (left_binding, right_binding) {
+                    (Some((_, mapped_right)), Some((mapped_left, _))) => {
+                        mapped_right == right_id && mapped_left == left_id
+                    }
+                    (None, None) => left_id == right_id,
+                    _ => false,
+                }
+            }
+            (Term::Const(left), Term::Const(right)) => left == right,
+            (Term::Apply(left_name, left_args), Term::Apply(right_name, right_args)) => {
+                left_name == right_name
+                    && left_args.len() == right_args.len()
+                    && left_args.iter().zip(right_args).all(|(l, r)| terms(l, r, bound))
+            }
+            _ => false,
+        }
+    }
+
+    fn formulas(
+        left: &Formula,
+        right: &Formula,
+        bound: &mut Vec<(VarId, VarId)>,
+    ) -> bool {
+        match (left, right) {
+            (Formula::Eq(ll, lr), Formula::Eq(rl, rr)) => {
+                terms(ll, rl, bound) && terms(lr, rr, bound)
+            }
+            (Formula::Pred(ln, la), Formula::Pred(rn, ra)) => {
+                ln == rn
+                    && la.len() == ra.len()
+                    && la.iter().zip(ra).all(|(l, r)| terms(l, r, bound))
+            }
+            (Formula::And(ll, lr), Formula::And(rl, rr))
+            | (Formula::Or(ll, lr), Formula::Or(rl, rr))
+            | (Formula::Implies(ll, lr), Formula::Implies(rl, rr)) => {
+                formulas(ll, rl, bound) && formulas(lr, rr, bound)
+            }
+            (Formula::Not(left), Formula::Not(right)) => formulas(left, right, bound),
+            (
+                Formula::Exists { var: left_var, sort: left_sort, body: left_body },
+                Formula::Exists { var: right_var, sort: right_sort, body: right_body },
+            ) => {
+                if left_sort != right_sort {
+                    return false;
+                }
+                bound.push((left_var.clone(), right_var.clone()));
+                let equivalent = formulas(left_body, right_body, bound);
+                bound.pop();
+                equivalent
+            }
+            _ => false,
+        }
+    }
+
+    formulas(left, right, &mut Vec::new())
+}
+
+fn witness_sort(term: &Term, universe: &Universe) -> Result<Sort, String> {
+    match term {
+        Term::Var(_, sort) => Ok(sort.clone()),
+        Term::Const(name) => universe.constants.get(name).cloned().ok_or_else(|| {
+            format!("existential witness constant '{}' has no declared sort", name)
+        }),
+        Term::Apply(_, _) => universe
+            .infer_term_sort(term)?
+            .ok_or_else(|| "existential witness function has no known return sort".to_string()),
+    }
+}
+
 fn check_node(
     proof: &ProofStep,
     universe: &Universe,
     path: &mut Vec<usize>,
 ) -> Result<(), KernelError> {
     let fail = |message: String, path: &[usize]| KernelError::at(path, message);
+
+    universe.validate_formula(&proof.goal).map_err(|message| {
+        fail(format!("ill-typed proof goal: {}", message), path)
+    })?;
 
     match &proof.rule {
         ProofRule::EqualityReflexivity => {
@@ -84,9 +174,12 @@ fn check_node(
                     path,
                 ));
             };
+            universe.validate_formula(fact).map_err(|message| {
+                fail(format!("assumption '{}' is ill-typed: {}", name, message), path)
+            })?;
             if !proof.sub_proofs.is_empty()
                 || !proof.witnesses.is_empty()
-                || fact.unify(&proof.goal).is_none()
+                || !formulas_alpha_equivalent(fact, &proof.goal)
             {
                 return Err(fail(
                     format!("fact '{}' does not establish {}", name, proof.goal),
@@ -136,7 +229,7 @@ fn check_node(
             }
         }
         ProofRule::ExistentialIntroduction => {
-            let Formula::Exists { var, body, .. } = &proof.goal else {
+            let Formula::Exists { var, sort, body } = &proof.goal else {
                 return Err(fail(
                     "existential rule used for a non-existential goal".into(),
                     path,
@@ -151,8 +244,20 @@ fn check_node(
                     path,
                 ));
             }
-            let bindings =
-                HashMap::from([(var.clone(), proof.witnesses[0].1.clone())]);
+            let witness = &proof.witnesses[0].1;
+            let actual_sort = witness_sort(witness, universe).map_err(|message| {
+                fail(format!("invalid existential witness: {}", message), path)
+            })?;
+            if actual_sort != *sort {
+                return Err(fail(
+                    format!(
+                        "existential witness has sort {}, but the binder requires {}",
+                        actual_sort, sort
+                    ),
+                    path,
+                ));
+            }
+            let bindings = HashMap::from([(var.clone(), witness.clone())]);
             let instantiated = body.substitute(&bindings);
             if proof.sub_proofs[0].goal != instantiated {
                 return Err(fail(
