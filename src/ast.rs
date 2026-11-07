@@ -131,3 +131,26 @@ impl fmt::Display for Formula {
         }
     }
 }
+
+
+#[cfg(test)]
+mod variable_identity_tests {
+    use super::VarId;
+
+    #[test]
+    fn same_spelling_gets_distinct_opaque_identities() {
+        let first = VarId::fresh("x");
+        let second = VarId::fresh("x");
+        assert_ne!(first, second);
+        assert_eq!(first.display_name(), "x");
+        assert_eq!(second.display_name(), "x");
+    }
+
+    #[test]
+    fn derived_identity_preserves_display_name_without_aliasing() {
+        let original = VarId::fresh("x");
+        let instance = original.derived("__instance7");
+        assert_ne!(original, instance);
+        assert_eq!(instance.display_name(), "x");
+    }
+}
